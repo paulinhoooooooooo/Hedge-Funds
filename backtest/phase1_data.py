@@ -31,6 +31,11 @@ arrêtée ; `all` les enchaîne) :
             (13D / 13G) avec le nom du déclarant                               [SEC_CONTACT_EMAIL]
   insiders  achats des dirigeants sur le marché (Form 4, code P) : jeux trimestriels de la SEC,
             complétés par les Form 4 déposés depuis                          [SEC_CONTACT_EMAIL]
+  etf_flows vrais flux des ETF sectoriels SPDR : parts en circulation publiées chaque jour par
+            State Street (variation des parts x valeur liquidative), depuis 2003
+  macro     météo du marché : VIX et indice de stress financier (FRED, gratuit)
+  fundamentals  bénéfices des 12 derniers mois et valorisation, à la date de publication
+            (comptes déposés à la SEC, XBRL)                                  [SEC_CONTACT_EMAIL]
   alpaca    barres horaires de toutes les bourses (unité de temps « heure » du radar) et gros
             blocs d'au moins 1 M$ repérés dans le détail des transactions, 15 minutes après
                                                     [ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY]
@@ -96,6 +101,12 @@ SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{document
 EVENTS_START = "2019-01-01"
 ALPACA_DATA = "https://data.alpaca.markets/v2/stocks/{kind}"
 ALPACA_HISTORY_START = "2016-01-01"  # historique des barres Alpaca : depuis 2016
+SSGA_NAV_HISTORY = "https://www.ssga.com/library-content/products/fund-data/etfs/us/navhist-us-en-{etf}.xlsx"
+FRED_SERIES = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
+# Météo du marché : indice de la peur (VIX, quotidien) et indice de stress financier de la Fed de
+# Saint-Louis (hebdomadaire, semaine close le vendredi, publié le jeudi suivant)
+MACRO_SERIES = {"VIXCLS": 1, "STLFSI4": 7}  # série -> délai de publication en jours
+SEC_COMPANY_FACTS = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 BLOCK_MIN_NOTIONAL = 1e6  # un « gros bloc » : au moins 1 M$ en une seule transaction
 # Transactions exclues : prix moyen ou dérivé d'un autre produit, prix antérieur, hors séquence,
 # ouvertures et clôtures officielles (enchères mécaniques)
@@ -308,7 +319,17 @@ def stage_sec(http: Optional[Http] = None, keep_zips: bool = False) -> None:
         zpath = raw / f"{name}.zip"
         if not zpath.exists():
             print(f"[{k}/{len(urls)}] téléchargement {name}")
-            zpath.write_bytes(http.get(url))
+            try:
+                zpath.write_bytes(http.get(url))
+            except HttpError as err:
+                if err.status != 404:
+                    raise
+                time.sleep(30)  # archive annoncée mais momentanément introuvable : un second essai
+                try:
+                    zpath.write_bytes(http.get(url))
+                except HttpError:
+                    print(f"[{k}/{len(urls)}] {name} introuvable (404) : ignorée, à relancer plus tard")
+                    continue
         rows, stats = process_13f_zip(zpath)
         stats.to_parquet(inter / f"{name}.managers.parquet", index=False)
         rows.to_parquet(done, index=False)
@@ -1259,6 +1280,173 @@ def stage_alpaca(http: Optional[Http] = None, days: int = 20, hourly_sessions: i
     allb.to_csv(DATA / "blocks.csv", index=False)
 
 
+# =============================================================================
+# Étapes « etf_flows », « macro », « fundamentals » : améliorations de l'analyse
+# =============================================================================
+
+def parse_ssga_nav_history(raw: bytes) -> pd.DataFrame:
+    """Fichier « NAV History » de State Street -> date, nav, shares, tna (ordre chronologique)."""
+    x = pd.read_excel(io.BytesIO(raw), header=None)
+    dates = pd.to_datetime(x[0], format="%d-%b-%Y", errors="coerce")
+    df = pd.DataFrame({"date": dates, "nav": pd.to_numeric(x[1], errors="coerce"),
+                       "shares": pd.to_numeric(x[2], errors="coerce"), "tna": pd.to_numeric(x[3], errors="coerce")})
+    return df.dropna(subset=["date", "nav", "shares"]).sort_values("date").reset_index(drop=True)
+
+
+def real_etf_flows(history: pd.DataFrame, vehicle: str) -> pd.DataFrame:
+    """Flux net du jour = variation des parts en circulation x valeur liquidative ; encours = actif net."""
+    h = history.sort_values("date")
+    flow = h["shares"].diff() * h["nav"]
+    aum = h["tna"].where(h["tna"].notna(), h["shares"] * h["nav"])
+    return pd.DataFrame({"date": h["date"], "vehicle": vehicle, "net_flow": flow, "aum": aum}).iloc[1:]
+
+
+def stage_etf_flows(http: Optional[Http] = None) -> None:
+    http = http or Http(headers={"User-Agent": "Mozilla/5.0 (FlowFund-Research)"}, min_interval=1.0)
+    frames = {}
+    for etf in [MARKET_ETF, *SECTOR_ETFS]:
+        try:
+            frames[etf] = real_etf_flows(parse_ssga_nav_history(http.get(SSGA_NAV_HISTORY.format(etf=etf.lower()))), etf)
+        except (HttpError, ValueError) as err:
+            print(f"Flux réels {etf} indisponibles : {str(err)[:80]}")
+    for etf, pred in ETF_PREDECESSOR.items():  # ETF lancé tardivement : prolongé par son prédécesseur
+        if etf in frames and pred in frames:
+            start = frames[etf]["date"].min()
+            older = frames[pred][frames[pred]["date"] < start].assign(vehicle=etf)
+            frames[etf] = pd.concat([older, frames[etf]], ignore_index=True)
+    out = pd.concat(frames.values(), ignore_index=True)
+    out.to_csv(DATA / "etf_flows_real.csv", index=False)
+    print(f"Flux réels des ETF : {len(frames)} fonds, depuis {out['date'].min():%Y}")
+
+
+def stage_macro(http: Optional[Http] = None) -> None:
+    http = http or Http(headers={"User-Agent": "FlowFund-Research/1.0"}, min_interval=1.0)
+    frames = []
+    for series, lag in MACRO_SERIES.items():
+        df = pd.read_csv(io.BytesIO(http.get(FRED_SERIES.format(series=series))))
+        df.columns = ["date", "value"]
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        df = df.dropna()
+        df["date"] = pd.to_datetime(df["date"])
+        frames.append(df.assign(series=series, available=df["date"] + pd.Timedelta(days=lag)))
+    out = pd.concat(frames, ignore_index=True)[["series", "date", "available", "value"]]
+    out.to_csv(DATA / "macro.csv", index=False)
+    print(f"Météo du marché : {', '.join(MACRO_SERIES)} ({len(out):,} observations)")
+
+
+def _duration_facts(entries: list[dict], lo: int, hi: int) -> pd.DataFrame:
+    """Faits XBRL d'une durée comprise entre lo et hi jours ; pour chaque période, la PREMIÈRE valeur
+    publiée (les corrections ultérieures n'étaient pas connues à la date)."""
+    df = pd.DataFrame([e for e in entries if e.get("start") and e.get("end") and e.get("filed")])
+    if df.empty:
+        return df
+    df["start"], df["end"], df["filed"] = (pd.to_datetime(df[c]) for c in ("start", "end", "filed"))
+    dur = (df["end"] - df["start"]).dt.days
+    df = df[(dur >= lo) & (dur <= hi)]
+    return df.sort_values("filed").drop_duplicates(["start", "end"], keep="first")
+
+
+def ttm_series(entries: list[dict]) -> pd.DataFrame:
+    """Somme des 4 derniers trimestres (le 4e trimestre = exercice - 3 premiers trimestres), avec la
+    date à laquelle elle est connue. À défaut de trimestres, l'exercice annuel."""
+    q = _duration_facts(entries, 80, 100)
+    a = _duration_facts(entries, 350, 380)
+    quarters = [] if q.empty else list(q[["start", "end", "val", "filed"]].itertuples(index=False))
+    if not a.empty and not q.empty:
+        for r in a.itertuples():
+            inside = q[(q["start"] >= r.start - pd.Timedelta(days=7)) & (q["end"] < r.end - pd.Timedelta(days=30))]
+            if len(inside) == 3 and not ((q["end"] - r.end).abs() <= pd.Timedelta(days=7)).any():
+                quarters.append((inside["end"].max(), r.end, r.val - inside["val"].sum(), r.filed))
+    rows = []
+    if quarters:
+        qq = pd.DataFrame(quarters, columns=["start", "end", "val", "filed"]).sort_values("end")
+        qq = qq.drop_duplicates("end", keep="first").reset_index(drop=True)
+        for k in range(3, len(qq)):
+            last4 = qq.iloc[k - 3:k + 1]
+            if 330 <= (last4["end"].iloc[-1] - last4["end"].iloc[0]).days + 91 <= 400:
+                rows.append({"end": last4["end"].iloc[-1], "available": last4["filed"].max(), "ttm": last4["val"].sum()})
+    if not rows and not a.empty:
+        rows = [{"end": r.end, "available": r.filed, "ttm": r.val} for r in a.itertuples()]
+    return pd.DataFrame(rows, columns=["end", "available", "ttm"])
+
+
+def shares_series(facts: dict) -> pd.DataFrame:
+    """Nombre moyen d'actions dilué (toutes classes), à la date de publication ; à défaut, les actions
+    en circulation déclarées en couverture des rapports."""
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+    entries = gaap.get("WeightedAverageNumberOfDilutedSharesOutstanding", {}).get("units", {}).get("shares", [])
+    df = _duration_facts(entries, 80, 380)
+    if not df.empty:
+        return df[["end", "filed", "val"]].rename(columns={"filed": "available", "val": "shares"}).sort_values("available")
+    cover = facts.get("facts", {}).get("dei", {}).get("EntityCommonStockSharesOutstanding", {}).get("units", {}).get("shares", [])
+    df = pd.DataFrame(cover)
+    if df.empty:
+        return pd.DataFrame(columns=["end", "available", "shares"])
+    df = df.groupby(["accn", "end", "filed"], as_index=False)["val"].sum()  # plusieurs classes d'actions
+    return pd.DataFrame({"end": pd.to_datetime(df["end"]), "available": pd.to_datetime(df["filed"]),
+                         "shares": df["val"]}).sort_values("available")
+
+
+def earnings_yield_daily(facts: dict, prices: pd.DataFrame) -> pd.DataFrame:
+    """Rendement bénéficiaire quotidien = bénéfice des 12 derniers mois / capitalisation, avec les
+    seuls comptes publiés la veille au plus tard. Capitalisation = actions (corrigées des divisions
+    survenues depuis) x cours non ajusté."""
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+    ttm = pd.DataFrame(columns=["end", "available", "ttm"])
+    for tag in ("NetIncomeLoss", "ProfitLoss", "NetIncomeLossAvailableToCommonStockholdersBasic"):
+        entries = gaap.get(tag, {}).get("units", {}).get("USD", [])
+        if entries:
+            ttm = ttm_series(entries)
+            if len(ttm):
+                break
+    shares = shares_series(facts)
+    if ttm.empty or shares.empty or "close" not in prices.columns:
+        return pd.DataFrame(columns=["date", "earnings_yield", "net_income_ttm"])
+    idx = pd.DatetimeIndex(prices.index).astype("datetime64[ns]")
+    days = pd.DataFrame({"date": idx})
+
+    def known(frame: pd.DataFrame, col: str) -> pd.Series:
+        """Dernière valeur publiée strictement avant la séance (connue la veille au plus tard)."""
+        f = frame.assign(available=pd.to_datetime(frame["available"]).astype("datetime64[ns]"))
+        f = f.sort_values("available").drop_duplicates("available", keep="last")[["available", col]]
+        out = pd.merge_asof(days, f, left_on="date", right_on="available", allow_exact_matches=False)
+        return pd.Series(out[col].to_numpy(), index=idx)
+    ni = known(ttm, "ttm")
+    sh = known(shares, "shares")
+    sh_end = known(shares, "end")
+    split = (prices["splitFactor"].fillna(1.0).replace(0, 1.0).cumprod() if "splitFactor" in prices
+             else pd.Series(1.0, index=prices.index))
+    split = pd.Series(split.to_numpy(float), index=idx)
+    ends = pd.DatetimeIndex(pd.to_datetime(sh_end)).astype("datetime64[ns]")
+    pos = idx.searchsorted(ends, side="right") - 1
+    at_end = np.where((pos >= 0) & ends.notna(), split.to_numpy()[np.clip(pos, 0, None)], np.nan)
+    shares_now = sh * split.to_numpy() / np.where(np.isfinite(at_end) & (at_end > 0), at_end, 1.0)
+    cap = shares_now * prices["close"].to_numpy(float)
+    return pd.DataFrame({"date": idx, "earnings_yield": (ni / cap).to_numpy(), "net_income_ttm": ni.to_numpy()}).dropna()
+
+
+def stage_fundamentals(http: Optional[Http] = None) -> None:
+    http = http or sec_http()
+    sectors = json.load(open(DATA / "sectors.json"))
+    assets = sorted(set(cusip_ticker_map().values()))
+    prices = load_prices(assets)
+    frames = []
+    for asset in assets:
+        cik = sectors.get(asset, {}).get("cik")
+        if not cik or asset not in prices:
+            continue
+        try:
+            facts = json.loads(http.get(SEC_COMPANY_FACTS.format(cik=int(cik))))
+        except HttpError:
+            continue
+        df = earnings_yield_daily(facts, prices[asset])
+        if len(df):
+            frames.append(df.assign(asset=asset))
+    out = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["date", "earnings_yield", "asset"])
+    out[["asset", "date", "earnings_yield", "net_income_ttm"]].to_csv(DATA / "fundamentals.csv", index=False)
+    print(f"Comptes des entreprises : {out['asset'].nunique()} titres sur {len(assets)}")
+
+
 def copy_radar_extras(stocks: Iterable[str], out_dir: Path) -> list[str]:
     """Recopie dans le dossier du moteur les indices complémentaires disponibles, titres suivis seulement."""
     stocks = set(stocks)
@@ -1268,7 +1456,7 @@ def copy_radar_extras(stocks: Iterable[str], out_dir: Path) -> list[str]:
         ats = pd.concat([pd.read_parquet(f) for f in ats_files], ignore_index=True)
         ats[ats["asset"].isin(stocks)].to_csv(out_dir / "ats.csv", index=False)
         written.append("ats")
-    for table in ("short_interest", "insiders", "filings_5pct", "earnings", "blocks", "hourly"):
+    for table in ("short_interest", "insiders", "filings_5pct", "earnings", "blocks", "hourly", "fundamentals"):
         src = DATA / f"{table}.csv"
         if src.exists():
             df = pd.read_csv(src, keep_default_na=False, na_values=[""])
@@ -1386,6 +1574,9 @@ def build_engine_files(out_dir: Optional[Path] = None, lookback: int = 8, top_n:
     if finra is not None:
         finra[finra["asset"].isin(stocks)].to_csv(out_dir / "offexchange.csv", index=False)
     extras = copy_radar_extras(stocks, out_dir)
+    for name in ("etf_flows_real", "macro"):  # améliorations testées à part (backtest/ameliorations.py)
+        if (DATA / f"{name}.csv").exists():
+            pd.read_csv(DATA / f"{name}.csv").to_csv(out_dir / f"{name}.csv", index=False)
 
     summary = {
         "titres": len(stocks), "titres_sans_cours": len(stock_symbols) - len(stocks),
@@ -1432,8 +1623,8 @@ def status() -> None:
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Circuit de données réelles de la phase 1")
     parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
-                                          "cot", "ats", "short", "events", "insiders", "alpaca", "build", "names",
-                                          "buyers"])
+                                          "cot", "ats", "short", "events", "insiders", "alpaca", "etf_flows", "macro",
+                                          "fundamentals", "build", "names", "buyers"])
     parser.add_argument("--max-symbols", type=int, default=488,
                         help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
@@ -1442,7 +1633,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
         "sectors": stage_sectors, "prices": stage_prices, "finra": stage_finra, "cot": stage_cot,
         "ats": stage_ats, "short": stage_short, "events": stage_events, "insiders": stage_insiders,
-        "alpaca": stage_alpaca,
+        "alpaca": stage_alpaca, "etf_flows": stage_etf_flows, "macro": stage_macro, "fundamentals": stage_fundamentals,
         "build": lambda: print(json.dumps(build_engine_files(), indent=1, ensure_ascii=False)),
         "names": stage_names, "buyers": stage_buyers,
     }

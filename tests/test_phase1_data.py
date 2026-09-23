@@ -401,3 +401,46 @@ def test_alpaca_daily_prices_in_tiingo_format(tmp_path, monkeypatch):
     assert list(df["splitFactor"]) == [1.0, 1.0, 2.0]  # division le 22/09
     factors = p1.split_factors(prices)["AAPL"]
     assert factors.iloc[-1] == 2.0 and factors.iloc[0] == 1.0
+
+
+def test_ssga_nav_history_gives_real_flows():
+    rows = [["Fund Name:", "Technology Select Sector SPDR", None, None],
+            ["Ticker Symbol:", "XLK", None, None], [None, None, None, None],
+            ["Date", "NAV", "Shares Outstanding", "Total Net Assets"],
+            ["22-Sep-2026", 101.0, 1_100_000, 111_100_000.0],
+            ["21-Sep-2026", 100.0, 1_000_000, 100_000_000.0]]
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_excel(buf, header=False, index=False)
+    hist = p1.parse_ssga_nav_history(buf.getvalue())
+    assert list(hist["date"]) == [pd.Timestamp("2026-09-21"), pd.Timestamp("2026-09-22")]
+    flows = p1.real_etf_flows(hist, "XLK")
+    assert flows["net_flow"].iloc[0] == pytest.approx(100_000 * 101.0)  # 100 000 parts créées
+    assert flows["aum"].iloc[0] == pytest.approx(111_100_000.0)
+
+
+def test_trailing_earnings_rebuild_the_fourth_quarter():
+    def fact(start, end, val, filed):
+        return {"start": start, "end": end, "val": val, "filed": filed}
+    entries = [fact("2024-01-01", "2024-03-31", 10, "2024-05-01"), fact("2024-04-01", "2024-06-30", 20, "2024-08-01"),
+               fact("2024-07-01", "2024-09-30", 30, "2024-11-01"), fact("2024-01-01", "2024-12-31", 100, "2025-02-15"),
+               fact("2025-01-01", "2025-03-31", 15, "2025-05-01"),
+               fact("2024-01-01", "2024-03-31", 99, "2025-05-01")]  # correction ultérieure : ignorée
+    ttm = p1.ttm_series(entries)
+    first = ttm.iloc[0]
+    assert first["ttm"] == 100 and first["available"] == pd.Timestamp("2025-02-15")  # T4 = 100 - 60
+    assert ttm.iloc[1]["ttm"] == 20 + 30 + 40 + 15 and ttm.iloc[1]["available"] == pd.Timestamp("2025-05-01")
+
+
+def test_earnings_yield_uses_published_accounts_and_splits():
+    idx = pd.bdate_range("2025-02-10", "2025-03-10")
+    prices = pd.DataFrame({"close": 100.0, "splitFactor": 1.0}, index=idx)
+    prices.loc["2025-03-03":, "close"] = 50.0
+    prices.loc["2025-03-03", "splitFactor"] = 2.0  # division 2 pour 1
+    ni = [{"start": "2024-01-01", "end": "2024-12-31", "val": 400.0, "filed": "2025-02-14"}]
+    shares = [{"start": "2024-01-01", "end": "2024-12-31", "val": 100.0, "filed": "2025-02-14"}]
+    facts = {"facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": ni}},
+                                   "WeightedAverageNumberOfDilutedSharesOutstanding": {"units": {"shares": shares}}}}}
+    ey = p1.earnings_yield_daily(facts, prices).set_index("date")["earnings_yield"]
+    assert pd.Timestamp("2025-02-14") not in ey.index  # comptes publiés ce jour-là : connus le lendemain
+    assert ey.loc["2025-02-18"] == pytest.approx(400 / (100 * 100))
+    assert ey.loc["2025-03-05"] == pytest.approx(400 / (200 * 50))  # division : capitalisation inchangée

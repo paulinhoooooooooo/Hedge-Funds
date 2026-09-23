@@ -36,6 +36,8 @@ PINE_ACTIONS = {
     "RISK_STOP": (6, "STOP", "color.new(color.maroon, 0)"),
     "RISK_DRAWDOWN": (7, "DÉ-RISQUE", "color.new(color.purple, 0)"),
     "RISK_TRIM": (8, "ÉCRÊTAGE", "color.new(color.gray, 0)"),
+    "RISK_VOL": (9, "VOLATILITÉ", "color.new(color.purple, 40)"),
+    "RISK_REGIME": (10, "TENSION", "color.new(color.purple, 20)"),
 }
 MAX_PINE_EVENTS = 150  # garde le script sous les limites de compilation Pine
 MAX_TOOLTIP_CHARS = 280

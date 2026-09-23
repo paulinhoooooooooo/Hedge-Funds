@@ -150,6 +150,10 @@ class StrategyConfig:
     portfolio_dd_limit: Optional[float] = 0.20  # coupe-circuit drawdown du portefeuille
     derisk_fraction: float = 0.5
     derisk_cooldown_days: int = 63
+    # Contrôle des risques du portefeuille (désactivé par défaut) : volatilité cible du fonds,
+    # mesurée sur ses 63 dernières séances, et refus d'une ligne trop corrélée au portefeuille
+    target_vol: Optional[float] = None  # ex. 0.12 : exposition réduite si la volatilité dépasse 12 %
+    max_entry_correlation: Optional[float] = None  # ex. 0.85, corrélation sur 126 séances
 
     # --- Divers
     initial_capital: float = 100_000_000.0
@@ -178,6 +182,8 @@ ACTION_LABELS = {
     "RISK_STOP": "Sortie urgente — perte critique sur la ligne (niveau 3)",
     "RISK_DRAWDOWN": "Dé-risquage — coupe-circuit drawdown portefeuille (niveau 3)",
     "RISK_TRIM": "Écrêtage — limite de concentration par ligne (Risk Manager)",
+    "RISK_VOL": "Réduction — volatilité du portefeuille au-dessus de la cible (Risk Manager)",
+    "RISK_REGIME": "Réduction — marché sous tension (météo du marché)",
 }
 
 
@@ -784,6 +790,7 @@ class Signals:
     score: pd.DataFrame  # intensité du signal (classement des candidats)
     footprint: Optional[Footprint] = None
     radar: Optional[Radar] = None
+    gross_cap: Optional[pd.Series] = None  # exposition brute maximale du jour (météo du marché)
 
 
 def _window_min_periods(window: str) -> int:
@@ -951,6 +958,8 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
     d_foot = sig.dist_foot.to_numpy(bool)
     score = sig.score.to_numpy(float)
     vol = sig.vol.to_numpy(float)
+    rets = np.nan_to_num(sig.returns.to_numpy(float))
+    gross_cap = sig.gross_cap.reindex(cal).to_numpy(float) if sig.gross_cap is not None else None
     cost_rate = np.array([ASSET_CLASS_SPECS[c].cost_bps for c in classes]) * 1e-4 * cfg.cost_multiplier
 
     units = np.zeros(n)
@@ -1103,6 +1112,28 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                            f"{cfg.derisk_cooldown_days} jours.", nav)
                 derisk_until = t + pd.Timedelta(days=cfg.derisk_cooldown_days)
 
+        # 4 bis) Exposition maximale du jour : météo du marché et volatilité cible du fonds
+        gross_now = float(np.nansum(units * p)) / nav
+        cap = cfg.max_gross
+        reason = ""
+        if gross_cap is not None and np.isfinite(gross_cap[i]) and gross_cap[i] < cap:
+            cap, reason = float(gross_cap[i]), "RISK_REGIME"
+        if cfg.target_vol and i >= 64:
+            window = nav_hist[i - 63:i]
+            realized = float(np.std(np.diff(np.log(window)), ddof=1) * math.sqrt(252))
+            if realized > 0 and gross_now > 0:
+                vol_cap = gross_now * cfg.target_vol / realized
+                if vol_cap < cap:
+                    cap, reason = vol_cap, "RISK_VOL"
+        if reason and gross_now > cap * 1.15:
+            factor = cap / gross_now
+            for a in np.flatnonzero((scale > 0) & ~decided):
+                text = (f"Marché sous tension : exposition ramenée de {_pct(gross_now, 0, False)} à "
+                        f"{_pct(cap, 0, False)} de la NAV." if reason == "RISK_REGIME" else
+                        f"Volatilité du fonds au-dessus de la cible de {_pct(cfg.target_vol, 0, False)} : exposition "
+                        f"ramenée de {_pct(gross_now, 0, False)} à {_pct(cap, 0, False)} de la NAV.")
+                decide(i, t, a, scale[a] * factor, reason, False, text, nav)
+
         # 5a) Exit Management : revue de 100 % des lignes actives
         for a in np.flatnonzero((scale > 0) & ~decided):
             if (t - entry_date[a]).days < cfg.min_holding_days:
@@ -1127,8 +1158,8 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                   and (last_reduce[a] is None or (t - last_reduce[a]).days >= cfg.reentry_cooldown_days)):
                 # Renforcement plafonné par la limite par ligne et par l'exposition brute disponible
                 others = float(np.nansum(np.maximum(target, units) * p)) - max(target[a], units[a]) * p[a]
-                cap = min(cfg.max_weight * nav, cfg.max_gross * nav - others) / p[a]
-                new_units = min(base_units[a], cap)
+                room = min(cfg.max_weight * nav, cap * nav - others) / p[a]
+                new_units = min(base_units[a], room)
                 if new_units > target[a] * 1.05:
                     base_units[a] = new_units
                     decide(i, t, a, 1.0, "ADD_REACCUMULATION", False,
@@ -1151,9 +1182,16 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                     w = cfg.max_weight if vol[i, a] <= 0 else min(cfg.max_weight, cfg.risk_budget_per_position / vol[i, a])
                 # Les lignes en cours de vente comptent jusqu'à exécution complète (pas de levier transitoire)
                 exposure = float(np.nansum(np.maximum(target, units) * p)) / nav
-                w = min(w, cfg.max_gross - exposure)
+                w = min(w, cap - exposure)
                 if not np.isfinite(w) or w < cfg.min_weight:
                     continue
+                if cfg.max_entry_correlation is not None and (scale > 0).any() and i >= 126:
+                    held = np.flatnonzero(scale > 0)
+                    hist = rets[i - 125:i + 1]
+                    book = hist[:, held] @ np.nan_to_num(units[held] * p[held])
+                    cand = hist[:, a]
+                    if np.std(book) > 0 and np.std(cand) > 0 and np.corrcoef(book, cand)[0, 1] > cfg.max_entry_correlation:
+                        continue
                 base_units[a] = w * nav / p[a]
                 entry_vol[a] = vol[i, a]
                 entry_date[a] = t
