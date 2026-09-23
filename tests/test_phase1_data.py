@@ -376,3 +376,28 @@ def test_block_trades_filter_conditions_and_infer_side():
     assert [(b["venue"], b["side"], b["size"]) for b in blocks] == [("hors bourse", 1.0, 20_000.0),
                                                                     ("bourse", -1.0, 15_000.0)]
     assert blocks[0]["time"] == "11:00:01" and blocks[0]["date"] == pd.Timestamp("2026-09-22")
+
+
+class FakeAlpacaDaily:
+    """Barres quotidiennes selon le mode de correction demandé (division 2 pour 1 le 3e jour)."""
+
+    def get(self, url, params=None, headers=None):
+        days = ["2026-09-18T04:00:00Z", "2026-09-21T04:00:00Z", "2026-09-22T04:00:00Z"]
+        closes = {"raw": [200.0, 202.0, 101.5], "split": [100.0, 101.0, 101.5], "all": [99.0, 100.0, 101.5]}
+        rows = [{"t": t, "o": c, "h": c + 1, "l": c - 1, "c": c, "v": 1000, "n": 10, "vw": c}
+                for t, c in zip(days, closes[params["adjustment"]])]
+        symbols = params["symbols"].split(",")
+        return json.dumps({"bars": {s: rows for s in symbols if s != "ZZZZ"}, "next_page_token": None}).encode()
+
+
+def test_alpaca_daily_prices_in_tiingo_format(tmp_path, monkeypatch):
+    monkeypatch.setattr(p1, "DATA", tmp_path)
+    monkeypatch.setattr(p1, "cusip_ticker_map", lambda: {"037833100": "AAPL", "999999999": "ZZZZ"})
+    p1.stage_prices_alpaca(FakeAlpacaDaily())
+    prices = p1.load_prices(["AAPL", "ZZZZ"])
+    assert set(prices) == {"AAPL"}
+    df = prices["AAPL"]
+    assert list(df["adjClose"]) == [99.0, 100.0, 101.5]  # dividendes et divisions corrigés
+    assert list(df["splitFactor"]) == [1.0, 1.0, 2.0]  # division le 22/09
+    factors = p1.split_factors(prices)["AAPL"]
+    assert factors.iloc[-1] == 2.0 and factors.iloc[0] == 1.0

@@ -28,7 +28,7 @@ réseau « Complet » : rien à ajouter).
 | Univers | `python backtest/phase1_data.py universe --max-symbols 250` | < 5 min | « N premiers titres par trimestre, M titres distincts » |
 | Symboles boursiers | `python backtest/phase1_data.py figi` | ≈ 1 min par 250 titres | part des CUSIP reconnus (> 85 % attendu) |
 | Secteurs | `python backtest/phase1_data.py sectors` | < 5 min | titres sans code SIC (rattachés à SPY) |
-| Cours Tiingo | `nohup python backtest/phase1_data.py prices > data/phase1/prices.log 2>&1 &` | **≈ 75 s par symbole** (50/heure) : ≈ 5 h pour 250 titres | `tail data/phase1/prices.log` ; reprise automatique si relancé |
+| Cours | `python backtest/phase1_data.py prices` | **avec les clés Alpaca : quelques minutes** (historique depuis 2016, réécrit à chaque passage) ; sans elles, Tiingo : ≈ 75 s par symbole, ≈ 5 h pour 250 titres (lancer avec `nohup … &`) | nombre de symboles écrits dans `data/phase1/prices/` |
 | Hors bourse (FINRA) | `python backtest/phase1_data.py finra` | 20 à 40 min (depuis août 2018) | un fichier par mois dans `data/phase1/finra/` |
 | Banques (CFTC) | `python backtest/phase1_data.py cot` | < 1 min | position des banques vs leur habitude |
 | Bourses privées (FINRA) | `python backtest/phase1_data.py ats` | 30 à 60 min (depuis 2022) | un fichier par semaine dans `data/phase1/ats/` |
@@ -40,13 +40,15 @@ réseau « Complet » : rien à ajouter).
 | Noms des gérants | `python backtest/phase1_data.py names` | < 5 min | gérants identifiés |
 | Acheteurs et vendeurs | `python backtest/phase1_data.py buyers` | < 1 min | `data/phase1/engine/smart_money_buyers.csv` |
 
-Premier passage conseillé : **250 titres** (`--max-symbols 250`), pour obtenir un résultat en une
-demi-journée. L'univers pourra être élargi à 488 le mois suivant (limite Tiingo gratuite : 500
-symboles différents par mois).
+Avec les clés Alpaca, tout l'univers (488 titres) passe d'une traite : `python backtest/phase1_data.py all`
+(2 à 4 heures, surtout la SEC et la FINRA). Sans elles, premier passage conseillé à **250 titres**
+(`--max-symbols 250`) à cause du rythme de Tiingo.
 
-Les données téléchargées restent dans `data/` (exclu du dépôt : licences des fournisseurs). Si la
-session est interrompue, relancer la même commande : chaque étape reprend là où elle s'est
-arrêtée ; un symbole déjà téléchargé ne compte pas deux fois dans le quota Tiingo du mois.
+Les données téléchargées restent dans `data/` (exclu du dépôt : licences des fournisseurs). **Elles
+ne suivent pas d'une conversation à l'autre** : chaque nouvelle conversation repart d'un conteneur
+vide et relance les étapes. Si la session est interrompue, relancer la même commande : chaque
+étape reprend là où elle s'est arrêtée ; un symbole déjà téléchargé ne compte pas deux fois dans
+le quota Tiingo du mois.
 
 ## 2. Lancer le backtest réel
 

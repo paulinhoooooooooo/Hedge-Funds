@@ -17,8 +17,9 @@ arrêtée ; `all` les enchaîne) :
   figi      code CUSIP -> symbole boursier (API OpenFIGI, gratuite)
   sectors   secteur d'activité (code SIC publié par la SEC) -> ETF sectoriel SPDR
                                                                             [SEC_CONTACT_EMAIL]
-  prices    cours ajustés, plus hauts, plus bas, volumes et divisions d'actions (Tiingo,
-            50 requêtes par heure en gratuit : plusieurs heures)             [clé Tiingo]
+  prices    cours ajustés, plus hauts, plus bas, volumes et divisions d'actions : Alpaca si ses
+            clés sont présentes (quelques minutes, historique depuis 2016), sinon Tiingo (50
+            requêtes par heure en gratuit : plusieurs heures, depuis 2013)   [clés Alpaca ou Tiingo]
   finra     volumes échangés hors bourse et vendus à découvert hors bourse, titre par titre
             (fichiers FINRA « Reg SHO » quotidiens, depuis août 2018) -> radar des grands acteurs
   cot       positions des banques (« Dealer / Intermediary ») sur les contrats à terme
@@ -94,6 +95,7 @@ SEC_INSIDER_PAGE = "https://www.sec.gov/data-research/sec-markets-data/insider-t
 SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{document}"
 EVENTS_START = "2019-01-01"
 ALPACA_DATA = "https://data.alpaca.markets/v2/stocks/{kind}"
+ALPACA_HISTORY_START = "2016-01-01"  # historique des barres Alpaca : depuis 2016
 BLOCK_MIN_NOTIONAL = 1e6  # un « gros bloc » : au moins 1 M$ en une seule transaction
 # Transactions exclues : prix moyen ou dérivé d'un autre produit, prix antérieur, hors séquence,
 # ouvertures et clôtures officielles (enchères mécaniques)
@@ -524,7 +526,57 @@ def parse_tiingo_csv(raw: bytes) -> pd.DataFrame:
     return df
 
 
+def alpaca_keys_present() -> bool:
+    return bool(os.environ.get("ALPACA_API_KEY_ID", "").strip() and os.environ.get("ALPACA_API_SECRET_KEY", "").strip())
+
+
+def alpaca_daily_frame(adjusted: list[dict], split_only: list[dict], raw: list[dict]) -> pd.DataFrame:
+    """Barres quotidiennes Alpaca -> format des fichiers Tiingo (adjClose, adjHigh, adjLow, adjVolume,
+    splitFactor). Le facteur de division se lit dans le rapport cours brut / cours corrigé des seules
+    divisions : il change d'un facteur 2 le jour d'une division 2 pour 1."""
+    def frame(rows):
+        df = pd.DataFrame(rows)
+        df.index = pd.DatetimeIndex(new_york_time(df["t"]).dt.normalize().to_numpy())
+        return df
+    adj, spl, raw_df = frame(adjusted), frame(split_only), frame(raw)
+    ratio = (raw_df["c"] / spl["c"]).reindex(adj.index).ffill().bfill()
+    factor = (ratio.shift(1) / ratio).fillna(1.0)
+    factor = factor.where((factor - 1.0).abs() > 1e-3, 1.0).round(6)
+    return pd.DataFrame({"date": adj.index.strftime("%Y-%m-%d"), "close": raw_df["c"].reindex(adj.index).to_numpy(),
+                         "adjOpen": adj["o"].to_numpy(), "adjHigh": adj["h"].to_numpy(), "adjLow": adj["l"].to_numpy(),
+                         "adjClose": adj["c"].to_numpy(), "adjVolume": adj["v"].to_numpy(),
+                         "splitFactor": factor.to_numpy()})
+
+
+def stage_prices_alpaca(http: Optional[Http] = None, start: str = ALPACA_HISTORY_START) -> None:
+    """Cours quotidiens de toutes les bourses (Alpaca, historique depuis 2016) : quelques minutes pour
+    tout l'univers, réécrits à chaque passage pour intégrer les dernières séances."""
+    http = http or alpaca_http()
+    folder = DATA / "prices"
+    folder.mkdir(parents=True, exist_ok=True)
+    symbols = [MARKET_ETF, *SECTOR_ETFS, *sorted(set(cusip_ticker_map().values()))]
+    written, absent = 0, []
+    for k in range(0, len(symbols), 100):
+        chunk = symbols[k:k + 100]
+        names = [ats_symbol(s) for s in chunk]
+        pulls = {adj: alpaca_query(http, "bars", names, {"timeframe": "1Day", "adjustment": adj, "start": start})
+                 for adj in ("all", "split", "raw")}
+        for s, name in zip(chunk, names):
+            if not pulls["all"].get(name):
+                absent.append(s)
+                continue
+            df = alpaca_daily_frame(pulls["all"][name], pulls["split"].get(name, pulls["all"][name]),
+                                    pulls["raw"].get(name, pulls["all"][name]))
+            df.to_csv(folder / f"{s}.csv", index=False)
+            written += 1
+    print(f"Cours (Alpaca, depuis {start[:4]}) : {written}/{len(symbols)} symboles ; absents : {len(absent)} "
+          f"{', '.join(absent[:15])}{'…' if len(absent) > 15 else ''}")
+
+
 def stage_prices(http: Optional[Http] = None, start: str = "2013-01-01") -> None:
+    if http is None and alpaca_keys_present():
+        stage_prices_alpaca()  # rapide ; Tiingo reste utilisable sans clés Alpaca (historique depuis 2013)
+        return
     http = http or tiingo_http()
     folder = DATA / "prices"
     folder.mkdir(parents=True, exist_ok=True)

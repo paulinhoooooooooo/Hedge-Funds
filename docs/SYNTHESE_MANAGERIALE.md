@@ -532,7 +532,7 @@ Le monde synthétique contient cette empreinte **par construction**. Ces chiffre
 | Mesure des achats | Indice de détention à composition constante (nombre d'actions) | **Livrée** (`smart_money.smart_money_holdings_index`) |
 | Jambe rapide | Proxy calculé sur les cours et volumes des ETF sectoriels (Chaikin Money Flow 30 jours), à la place d'EPFR | **Livré** (`smart_money.flows_from_ohlcv`) |
 | Correspondance CUSIP → ticker | API OpenFIGI (gratuite) | **Livrée** (`phase1_data.py figi`) |
-| Cours quotidiens (actions et ETF, divisions d'actions incluses) | Tiingo, offre gratuite (500 symboles par mois, 50 requêtes par heure) — Stooq bloque désormais les téléchargements automatiques | **Livrée** (`phase1_data.py prices`) |
+| Cours quotidiens (actions et ETF, divisions d'actions incluses) | Alpaca, compte gratuit : toutes les bourses, depuis 2016, quelques minutes pour tout l'univers ; à défaut Tiingo, offre gratuite (depuis 2013, 50 requêtes par heure) — Stooq bloque désormais les téléchargements automatiques | **Livrée** (`phase1_data.py prices`) |
 | Univers | Plus grosses lignes 13F de chaque trimestre (en dollars), dans la limite du quota Tiingo : les titres radiés depuis restent dans l'historique, sauf si OpenFIGI ne reconnaît plus leur code | **Livré** (`phase1_data.py universe`) |
 | Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | **Livré** (`phase1_data.py sectors`) |
 | Empreinte des grands acteurs | Calculée à partir des cours, plus hauts, plus bas et volumes | **Livrée** (`market_footprint.py`) |
