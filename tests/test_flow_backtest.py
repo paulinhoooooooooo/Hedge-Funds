@@ -91,6 +91,9 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
     high.loc[future] *= shock * 1.05
     low.loc[future] *= shock * 0.95
     volume.loc[future] *= rng.uniform(0.1, 10.0, size=(future.sum(), volume.shape[1]))
+    offx, offx_short = synthetic.offexchange.copy(), synthetic.offexchange_short.copy()
+    offx.loc[offx.index >= cutoff] *= 5.0  # la donnée hors bourse du jour J n'est connue que le soir
+    offx_short.loc[offx_short.index >= cutoff] *= 0.1
     flows = synthetic.flows.copy()
     aum = synthetic.aum.copy()
     flows.loc[flows.index >= cutoff] = rng.normal(0, 1e8, size=flows.loc[flows.index >= cutoff].shape)
@@ -103,7 +106,7 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
     h.loc[unpublished, "value"] *= rng.uniform(0.5, 1.5, size=unpublished.sum())
 
     perturbed = fb.MarketData(prices=prices, holdings=h, flows=flows, aum=aum, assets=synthetic.assets,
-                              high=high, low=low, volume=volume)
+                              high=high, low=low, volume=volume, offexchange=offx, offexchange_short=offx_short)
     alt = fb.run_backtest(perturbed, cfg)
     pd.testing.assert_series_equal(base.equity.loc[:cutoff], alt.equity.loc[:cutoff])
     j1 = base.journal[base.journal["date"] <= cutoff].reset_index(drop=True)

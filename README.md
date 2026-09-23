@@ -10,11 +10,13 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 | [`backtest/flow_backtest.py`](backtest/flow_backtest.py) | Moteur de backtest : délais de publication appliqués (13F, COT, flux), sortie à trois niveaux, exécution fractionnée, métriques de risque, Matrice prédictive |
 | [`backtest/smart_money.py`](backtest/smart_money.py) | Liste Smart Money point-in-time (gérants sélectionnés sur leurs 13F passés), indice de détention à composition constante, proxy de flux gratuit à partir des volumes |
 | [`backtest/market_footprint.py`](backtest/market_footprint.py) | Troisième jambe : empreinte des grands acteurs (banques, institutions) dans le prix et le volume — zone de valeur, VWAP, ratio hausses / baisses, jours de distribution |
+| [`backtest/institutional_radar.py`](backtest/institutional_radar.py) | Radar des grands acteurs : volumes anormaux, pression acheteuse ou vendeuse, accumulation discrète et échanges hors bourse, sur l'heure, le jour, la semaine et le mois |
+| [`backtest/trade_cards.py`](backtest/trade_cards.py) · [`backtest/dashboard.py`](backtest/dashboard.py) | Fiches de trade (quoi, pourquoi, historique du signal, aujourd'hui) et page « Desk Smart Money » |
 | [`backtest/phase1_data.py`](backtest/phase1_data.py) | Circuit de données réelles gratuites (SEC 13F, OpenFIGI, secteurs SIC, cours Tiingo, positions des banques CFTC) — marche à suivre : [`docs/PHASE1_DONNEES_REELLES.md`](docs/PHASE1_DONNEES_REELLES.md) |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateurs Pine *Smart Money Flow Monitor* et *Empreinte des grands acteurs*, récepteur des alertes webhook |
 | [`mcp_server/`](mcp_server/) | Serveur MCP du fonds (lecture seule) : interroger le fonds en français depuis un assistant IA |
-| [`tests/`](tests/) | 47 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 57 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
 
 **Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
 gratuites, risque équilibré, TradingView gratuit, suivi des banques par le prix et le volume
@@ -27,6 +29,7 @@ pip install -r requirements.txt
 python backtest/flow_backtest.py                  # démo sur données SYNTHÉTIQUES
 python backtest/flow_backtest.py --tradingview    # + fichiers TradingView dans outputs/tradingview
 python backtest/flow_backtest.py --multi-seed 8   # robustesse sur 8 mondes synthétiques
+python backtest/dashboard.py                      # page « Desk Smart Money » (outputs/desk_smart_money.html)
 python -m pytest -q                               # tests
 ```
 
@@ -54,7 +57,8 @@ python backtest/flow_backtest.py --data-dir mes_donnees/
 | Fichier | Colonnes |
 |---|---|
 | `assets.csv` | `asset, asset_class (EQUITY / FX / COMMODITY / CRYPTO), flow_vehicle[, tv_symbol]` |
-| `prices.csv` | `date, asset, close[, high, low, volume]` (inclure les titres radiés ; plus haut, plus bas et volume activent l'empreinte des grands acteurs) |
+| `prices.csv` | `date, asset, close[, high, low, volume]` (inclure les titres radiés ; plus haut, plus bas et volume activent l'empreinte et le radar des grands acteurs) |
+| `offexchange.csv` (optionnel) | `date, asset, total_volume, short_volume` : volumes hors bourse (FINRA) |
 | `holdings.csv` | `asset, period_end, filing_date, value` : détention des institutions de référence (13F, COT, on-chain) |
 | `flows.csv` | `date, vehicle, net_flow, aum` : flux nets et encours des véhicules (ETF, EPFR, ETP) |
 

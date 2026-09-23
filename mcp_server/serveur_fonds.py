@@ -36,6 +36,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backtest"))
 
 import flow_backtest as fb  # noqa: E402
+import trade_cards as tc  # noqa: E402
 from market_footprint import describe_footprint  # noqa: E402
 
 INSTRUCTIONS = (
@@ -54,18 +55,38 @@ class FundState:
     review: pd.DataFrame
     label: str
     synthetic: bool
+    buyers: Optional[pd.DataFrame] = None
+    cot: Optional[pd.DataFrame] = None
+
+
+def _optional_csv(path: Path, dates: tuple[str, ...]) -> Optional[pd.DataFrame]:
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    for col in dates:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col])
+    return df
 
 
 def load_state(data_dir: Optional[str] = None, seed: int = 7) -> FundState:
     """Charge les données (CSV réels ou démonstration synthétique) et exécute le moteur."""
+    buyers = cot = None
     if data_dir:
         data = fb.load_market_from_csv(data_dir)
         label, synthetic = f"données réelles ({data_dir})", False
+        # Jambe rapide gratuite = Chaikin Money Flow des ETF sectoriels (seuils du §9.2 de la synthèse)
+        cfg = fb.StrategyConfig(entry_flow_threshold=0.0, exit_flow_threshold=-0.05)
+        buyers = _optional_csv(Path(data_dir) / "smart_money_buyers.csv", ("period_end", "available_date"))
+        cot = _optional_csv(Path(__file__).resolve().parents[1] / "data" / "phase1" / "cot_dealers.csv",
+                            ("report_date", "available_date"))
     else:
         data = fb.generate_synthetic_market(seed=seed)
         label, synthetic = "DONNÉES SYNTHÉTIQUES de démonstration — aucune valeur réelle", True
-    result = fb.run_backtest(data, fb.StrategyConfig())
-    return FundState(data=data, result=result, review=fb.review_positions(result), label=label, synthetic=synthetic)
+        cfg = fb.StrategyConfig()
+    result = fb.run_backtest(data, cfg)
+    return FundState(data=data, result=result, review=fb.review_positions(result), label=label,
+                     synthetic=synthetic, buyers=buyers, cot=cot)
 
 
 def _header(state: FundState) -> str:
@@ -181,6 +202,34 @@ def journal_des_decisions(state: FundState, actif: Optional[str] = None, nombre:
         f"**{e.date:%d/%m/%Y} — {e.asset} — {e.label}**\n{e.justification}" for e in j.itertuples())
 
 
+def derniers_trades(state: FundState, nombre: int = 5) -> str:
+    """Fiches des dernières décisions : quoi, pourquoi, ce que le signal a donné par le passé, aujourd'hui."""
+    cards = tc.build_trade_cards(state.result, n=max(1, min(int(nombre), 20)), buyers=state.buyers,
+                                 cot=state.cot, synthetic=state.synthetic)
+    if not cards:
+        return _header(state) + "Aucune décision enregistrée."
+    return _header(state) + "## Dernières décisions du fonds\n\n" + "\n\n".join(c.to_text() for c in cards)
+
+
+def radar_grands_acteurs(state: FundState, actif: Optional[str] = None) -> str:
+    """Alertes du radar (heure, jour, semaine, mois) : où les grands acteurs laissent des traces."""
+    radar = state.result.signals.radar
+    if radar is None:
+        return _header(state) + "Radar indisponible : pas de volume dans les données."
+    if actif:
+        name = _resolve(state, actif)
+        i = len(radar.score) - 1
+        score = radar.score[name].iloc[i]
+        return (_header(state) + f"## Radar sur {name}\nScore {score:+.1f} (alerte à partir de ±2,5).\n\n"
+                + radar.explain(name, i))
+    rows = []
+    for i in range(len(radar.score) - 1, max(-1, len(radar.score) - 11), -1):
+        rows += [f"- {a.date:%d/%m/%Y} — {a.asset} — {a.sens} (score {a.score:+.1f}) : {a.explication}"
+                 for a in radar.alerts(date=radar.score.index[i]).itertuples()]
+    body = "\n".join(rows[:15]) if rows else "Aucune trace anormale sur les 10 dernières séances."
+    return _header(state) + "## Radar des grands acteurs (10 dernières séances)\n" + body
+
+
 def lister_actifs(state: FundState) -> str:
     a = state.result.assets
     rows = [f"- {name} ({row.asset_class}, véhicule de flux {row.flow_vehicle})" for name, row in a.iterrows()]
@@ -201,6 +250,12 @@ TOOLS: dict[str, tuple[Callable, str]] = {
     "journal_des_decisions": (journal_des_decisions,
                               "Dernières décisions du fonds et leur justification, pour un actif ou pour tout le portefeuille."),
     "lister_actifs": (lister_actifs, "Liste des actifs suivis par le fonds."),
+    "derniers_trades": (derniers_trades,
+                        "Fiches des dernières décisions du fonds : pourquoi il a acheté ou vendu, ce que ce signal "
+                        "a donné par le passé, et où en est la position aujourd'hui."),
+    "radar_grands_acteurs": (radar_grands_acteurs,
+                             "Radar des grands acteurs : volumes anormaux et achats ou ventes massifs repérés sur "
+                             "l'heure, le jour, la semaine et le mois, pour tout le marché ou pour un actif."),
 }
 
 
@@ -222,6 +277,12 @@ def build_server(state_loader: Callable[[], FundState]):
     def register(name: str, fn: Callable, description: str) -> None:
         if name in ("analyser_actif", "empreinte_grands_acteurs"):
             def tool(actif: str) -> str:
+                return fn(state(), actif)
+        elif name == "derniers_trades":
+            def tool(nombre: int = 5) -> str:
+                return fn(state(), nombre)
+        elif name == "radar_grands_acteurs":
+            def tool(actif: Optional[str] = None) -> str:
                 return fn(state(), actif)
         elif name == "journal_des_decisions":
             def tool(actif: Optional[str] = None, nombre: int = 15) -> str:

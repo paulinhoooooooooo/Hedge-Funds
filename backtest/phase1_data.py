@@ -19,9 +19,13 @@ arrêtée ; `all` les enchaîne) :
                                                                             [SEC_CONTACT_EMAIL]
   prices    cours ajustés, plus hauts, plus bas, volumes et divisions d'actions (Tiingo,
             50 requêtes par heure en gratuit : plusieurs heures)             [clé Tiingo]
+  finra     volumes échangés hors bourse et vendus à découvert hors bourse, titre par titre
+            (fichiers FINRA « Reg SHO » quotidiens, depuis août 2018) -> radar des grands acteurs
   cot       positions des banques (« Dealer / Intermediary ») sur les contrats à terme
             E-mini S&P 500 et Nasdaq-100 (CFTC, rapport TFF)
   build     liste Smart Money, indice de détention, proxy de flux -> data/phase1/engine/
+  names     noms des gérants de la liste Smart Money (SEC)                   [SEC_CONTACT_EMAIL]
+  buyers    qui a acheté ou vendu chaque action, trimestre par trimestre -> fiches de trade
 
 Identifiants (jamais dans le code ni dans la conversation) :
   SEC_CONTACT_EMAIL  adresse de contact exigée par la SEC pour tout téléchargement automatique
@@ -66,6 +70,8 @@ SEC_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 OPENFIGI_URL = "https://api.openfigi.com/v3/mapping"
 TIINGO_PRICES = "https://api.tiingo.com/tiingo/daily/{ticker}/prices"
 CFTC_TFF = "https://publicreporting.cftc.gov/resource/gpe5-46if.json"
+FINRA_DAILY = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol{day:%Y%m%d}.txt"
+FINRA_START = "2018-08-01"  # fichiers consolidés « CNMS » disponibles depuis cette date
 
 # ETF sectoriels SPDR (jambe rapide) et marché large ; un ETF lancé tardivement est prolongé
 # dans le passé par l'ETF qui couvrait ce secteur avant lui (le Chaikin Money Flow est sans unité).
@@ -457,6 +463,120 @@ def stage_cot(http: Optional[Http] = None) -> None:
 
 
 # =============================================================================
+# Étape « finra » : échanges hors bourse (bourses privées, internalisation)
+# =============================================================================
+
+def parse_finra_daily(raw: bytes, symbols: set[str]) -> pd.DataFrame:
+    """Fichier FINRA « Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market » -> titres suivis."""
+    # keep_default_na=False : le symbole « NA » est une vraie action, pas une valeur manquante.
+    df = pd.read_csv(io.BytesIO(raw), sep="|", dtype=str, keep_default_na=False)
+    df = df[df["Date"].str.fullmatch(r"\d{8}", na=False)]
+    df = df.assign(asset=df["Symbol"].map(tiingo_symbol))
+    df = df[df["asset"].isin(symbols)]
+    return pd.DataFrame({
+        "date": pd.to_datetime(df["Date"], format="%Y%m%d").astype("datetime64[ns]"),
+        "asset": df["asset"], "total_volume": pd.to_numeric(df["TotalVolume"], errors="coerce"),
+        "short_volume": pd.to_numeric(df["ShortVolume"], errors="coerce"),
+    })
+
+
+def stage_finra(http: Optional[Http] = None, start: str = FINRA_START) -> None:
+    http = http or Http(headers={"User-Agent": "FlowFund-Research/1.0"}, min_interval=0.2)
+    folder = DATA / "finra"
+    folder.mkdir(parents=True, exist_ok=True)
+    symbols = set(cusip_ticker_map().values())
+    today = pd.Timestamp.today().normalize()
+    for month_start in pd.date_range(start, today, freq="MS"):
+        path = folder / f"{month_start:%Y-%m}.parquet"
+        month_end = month_start + pd.offsets.MonthEnd(0)
+        if path.exists() and month_end < today - pd.Timedelta(days=3):
+            continue  # mois complet déjà en cache
+        frames = []
+        for day in pd.bdate_range(month_start, min(month_end, today)):
+            try:
+                frames.append(parse_finra_daily(http.get(FINRA_DAILY.format(day=day)), symbols))
+            except HttpError as err:
+                if err.status not in (403, 404):  # jour férié : pas de fichier
+                    raise
+        if frames:
+            pd.concat(frames, ignore_index=True).to_parquet(path, index=False)
+            print(f"FINRA {month_start:%Y-%m} : {len(frames)} séances")
+
+
+def load_finra() -> Optional[pd.DataFrame]:
+    files = sorted((DATA / "finra").glob("*.parquet")) if (DATA / "finra").exists() else []
+    return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True) if files else None
+
+
+# =============================================================================
+# Étapes « names » et « buyers » : qui achète, qui vend
+# =============================================================================
+
+def stage_names(http: Optional[Http] = None) -> None:
+    http = http or sec_http()
+    path = DATA / "names.json"
+    names = json.load(open(path)) if path.exists() else {}
+    selection = pd.read_csv(DATA / "smart_money_selection.csv", dtype={"cik": str})
+    for cik in sorted(set(selection["cik"]) - set(names)):
+        try:
+            names[cik] = json.loads(http.get(SEC_SUBMISSIONS.format(cik=int(cik)))).get("name", "")
+        except HttpError:
+            names[cik] = ""
+    json.dump(names, open(path, "w"), indent=1, ensure_ascii=False)
+    print(f"Noms : {sum(bool(v) for v in names.values())}/{len(names)} gérants identifiés")
+
+
+def pretty_name(name: str) -> str:
+    """« BERKSHIRE HATHAWAY INC » -> « Berkshire Hathaway »."""
+    words = [w for w in re.split(r"\s+", str(name).strip()) if w]
+    drop = {"INC", "INC.", "LLC", "L.P.", "LP", "LTD", "CORP", "CO", "CO.", "/DE/", "/ADV", "/MD/", "/NY/", "/CA/"}
+    kept = [w for w in words if w.upper().strip(",") not in drop]
+    return " ".join(w.capitalize() if w.isupper() else w for w in kept).strip(" ,")
+
+
+def smart_money_buyers(positions: pd.DataFrame, selection: pd.DataFrame, names: Optional[dict] = None,
+                       statutory_lag_days: int = 45, top: int = 3) -> pd.DataFrame:
+    """Pour chaque action et chaque trimestre : combien de gérants de la liste ont acheté ou vendu,
+    et les principaux acheteurs. Les actions sont déjà corrigées des divisions ; la donnée n'est
+    utilisable qu'après l'échéance légale de publication (fin de trimestre + 45 jours + 1)."""
+    names = names or {}
+    pos = positions.assign(period_end=sm._quarter_end(positions["period_end"]))
+    rows = []
+    for q in sorted(selection["period_end"].unique()):
+        managers = set(selection.loc[selection["period_end"] == q, "cik"].astype(str))
+        cur = pos[(pos["period_end"] == q) & pos["cik"].astype(str).isin(managers)]
+        prev = pos[(pos["period_end"] == q - sm.QUARTER) & pos["cik"].astype(str).isin(managers)]
+        both = (cur.set_index(["cik", "asset"])["shares"].rename("cur").to_frame()
+                .join(prev.set_index(["cik", "asset"])["shares"].rename("prev"), how="outer").fillna(0.0))
+        both["delta"] = both["cur"] - both["prev"]
+        value = cur.set_index(["cik", "asset"])["value"] if "value" in cur.columns else None
+        for asset, grp in both.groupby(level="asset"):
+            buyers = grp[grp["delta"] > 0]
+            if value is not None:
+                order = value.reindex(buyers.index).fillna(0).sort_values(ascending=False).index
+            else:
+                order = buyers.sort_values("delta", ascending=False).index
+            top_names = [pretty_name(names.get(str(cik), "")) for cik, _ in list(order)[:top]]
+            rows.append({
+                "asset": asset, "period_end": q,
+                "available_date": pd.Timestamp(q) + pd.Timedelta(days=statutory_lag_days + 1),
+                "n_managers": len(managers), "n_buyers": int((grp["delta"] > 0).sum()),
+                "n_sellers": int((grp["delta"] < 0).sum()),
+                "top_buyers": ", ".join(n for n in top_names if n),
+            })
+    return pd.DataFrame(rows)
+
+
+def stage_buyers() -> None:
+    pos = pd.read_parquet(DATA / "positions_tracked.parquet")
+    selection = pd.read_csv(DATA / "smart_money_selection.csv", dtype={"cik": str}, parse_dates=["period_end"])
+    names = json.load(open(DATA / "names.json")) if (DATA / "names.json").exists() else {}
+    out = smart_money_buyers(pos, selection, names)
+    out.to_csv(DATA / "engine" / "smart_money_buyers.csv", index=False)
+    print(f"Acheteurs et vendeurs : {len(out)} lignes (action x trimestre)")
+
+
+# =============================================================================
 # Étape « build » : fichiers du moteur
 # =============================================================================
 
@@ -525,6 +645,7 @@ def build_engine_files(out_dir: Optional[Path] = None, lookback: int = 8, top_n:
     counts = managers.set_index(["period_end", "cik"])["n_positions"]
     selection = sm.select_smart_money(returns, pos, lookback=lookback, top_n=top_n, position_counts=counts)
     adjusted = adjust_shares_for_splits(pos, split_factors(prices))
+    adjusted.to_parquet(DATA / "positions_tracked.parquet", index=False)
     holdings = sm.smart_money_holdings_index(adjusted, selection)
 
     vehicles = {}
@@ -558,11 +679,15 @@ def build_engine_files(out_dir: Optional[Path] = None, lookback: int = 8, top_n:
     au = aum.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="aum")
     fl.merge(au, on=["date", "vehicle"]).dropna(subset=["net_flow"]).to_csv(out_dir / "flows.csv", index=False)
     selection.to_csv(DATA / "smart_money_selection.csv", index=False)
+    finra = load_finra()
+    if finra is not None:
+        finra[finra["asset"].isin(stocks)].to_csv(out_dir / "offexchange.csv", index=False)
 
     summary = {
         "titres": len(stocks), "titres_sans_cours": len(stock_symbols) - len(stocks),
         "gerants_classes": int(returns["cik"].nunique()), "trimestres_de_liste": int(selection["period_end"].nunique()),
         "lignes_holdings": len(holdings), "etf": sorted(vehicles),
+        "hors_bourse": finra is not None,
     }
     json.dump(summary, open(out_dir / "resume.json", "w"), indent=1, ensure_ascii=False)
     return summary
@@ -582,23 +707,29 @@ def status() -> None:
     print(f"sectors   : {ok(DATA / 'sectors.json')}")
     n_px = len(list((DATA / 'prices').glob('*.csv'))) if (DATA / 'prices').exists() else 0
     print(f"prices    : {n_px} fichier(s) de cours")
+    n_finra = len(list((DATA / 'finra').glob('*.parquet'))) if (DATA / 'finra').exists() else 0
+    print(f"finra     : {n_finra} mois")
     print(f"cot       : {ok(DATA / 'cot_dealers.csv')}")
     print(f"build     : {ok(DATA / 'engine' / 'resume.json')}")
+    print(f"names     : {ok(DATA / 'names.json')}")
+    print(f"buyers    : {ok(DATA / 'engine' / 'smart_money_buyers.csv')}")
     print(f"SEC_CONTACT_EMAIL {'défini' if os.environ.get('SEC_CONTACT_EMAIL') else 'ABSENT'} ; "
           f"TIINGO_API_KEY {'défini' if os.environ.get('TIINGO_API_KEY') else 'absent (identifiants de l environnement ?)'}")
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Circuit de données réelles de la phase 1")
-    parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "cot", "build"])
+    parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
+                                          "cot", "build", "names", "buyers"])
     parser.add_argument("--max-symbols", type=int, default=488,
                         help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
     DATA.mkdir(parents=True, exist_ok=True)
     stages: dict[str, Callable[[], object]] = {
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
-        "sectors": stage_sectors, "prices": stage_prices, "cot": stage_cot,
+        "sectors": stage_sectors, "prices": stage_prices, "finra": stage_finra, "cot": stage_cot,
         "build": lambda: print(json.dumps(build_engine_files(), indent=1, ensure_ascii=False)),
+        "names": stage_names, "buyers": stage_buyers,
     }
     if args.stage == "status":
         status()
