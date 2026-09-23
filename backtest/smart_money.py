@@ -40,7 +40,7 @@ def _quarter_end(dates: pd.Series) -> pd.Series:
     return (ts + pd.offsets.QuarterEnd(0)).astype("datetime64[ns]")
 
 
-def manager_quarterly_returns(positions: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
+def manager_quarterly_returns(positions: pd.DataFrame, prices: pd.DataFrame, weights: str = "shares") -> pd.DataFrame:
     """Rendement « copie conforme » de chaque gérant, trimestre par trimestre.
 
     Le portefeuille déclaré à la fin du trimestre q est conservé tel quel jusqu'à la fin du
@@ -48,7 +48,10 @@ def manager_quarterly_returns(positions: pd.DataFrame, prices: pd.DataFrame) -> 
     trimestre suivant (colonne known_at) : c'est la date à partir de laquelle il peut servir
     à sélectionner les gérants.
 
-    positions : cik, asset, period_end, shares (sortie de load_13f_positions)
+    positions : cik, asset, period_end, shares (sortie de load_13f_positions) ; avec
+                weights="value", une colonne value (valeur déclarée) sert de pondération, ce
+                qui rend le calcul insensible aux divisions d'actions entre la déclaration et
+                les cours ajustés.
     prices    : DataFrame [date x asset] de cours ajustés des divisions d'actions
     Retourne cik, period_end, known_at, ret, n_priced.
     """
@@ -67,7 +70,11 @@ def manager_quarterly_returns(positions: pd.DataFrame, prices: pd.DataFrame) -> 
     pos = pos.merge(long.rename(columns={"date": "period_end", "price": "p0"}), on=["period_end", "asset"])
     pos = pos.merge(long.rename(columns={"date": "known_at", "price": "p1"}), on=["known_at", "asset"])
     pos = pos[(pos["p0"] > 0) & (pos["p1"] > 0)]
-    pos = pos.assign(v0=pos["shares"] * pos["p0"], v1=pos["shares"] * pos["p1"])
+    if weights == "value":
+        pos = pos[pos["value"] > 0]
+        pos = pos.assign(v0=pos["value"], v1=pos["value"] * pos["p1"] / pos["p0"])
+    else:
+        pos = pos.assign(v0=pos["shares"] * pos["p0"], v1=pos["shares"] * pos["p1"])
     out = pos.groupby(["cik", "period_end", "known_at"]).agg(v0=("v0", "sum"), v1=("v1", "sum"),
                                                              n_priced=("asset", "nunique")).reset_index()
     out["ret"] = out["v1"] / out["v0"] - 1.0
@@ -81,6 +88,7 @@ def select_smart_money(
     top_n: int = 50,
     min_positions: int = 20,
     max_positions: int = 1500,
+    position_counts: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Liste Smart Money point-in-time.
 
@@ -93,12 +101,15 @@ def select_smart_money(
     Aucune information postérieure à q n'est utilisée ; la liste de q ne sert qu'aux rapports
     de q, eux-mêmes publiés 45 jours plus tard.
 
+    position_counts : nombre TOTAL de lignes de chaque gérant, indexé par (period_end, cik),
+    quand `positions` ne contient qu'une partie des portefeuilles (l'univers suivi).
+
     Retourne period_end, cik, score, rank.
     """
     r = returns.assign(excess=returns["ret"] - returns.groupby("period_end")["ret"].transform("mean"))
     excess = r.pivot_table(index="known_at", columns="cik", values="excess").sort_index()
     pos = positions.assign(period_end=_quarter_end(positions["period_end"]))
-    counts = pos.groupby(["period_end", "cik"])["asset"].nunique()
+    counts = pos.groupby(["period_end", "cik"])["asset"].nunique() if position_counts is None else position_counts
 
     rows = []
     for q in sorted(pos["period_end"].unique()):

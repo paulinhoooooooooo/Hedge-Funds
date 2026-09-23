@@ -438,40 +438,23 @@ def _parse_sec_date(series: pd.Series) -> pd.Series:
     return parsed.fillna(fallback).astype("datetime64[ns]")
 
 
-def load_13f_positions(
-    dataset_dirs: Iterable[str | Path],
-    cusip_to_asset: Optional[Mapping[str, str]] = None,
+def filter_13f_filings(
+    sub: pd.DataFrame, info: pd.DataFrame, statutory_lag_days: int = 45,
     reference_ciks: Optional[Iterable[str | int]] = None,
-    statutory_lag_days: int = 45,
 ) -> pd.DataFrame:
-    """Lit les « Form 13F Data Sets » de la SEC (DERA) : une ligne par gérant, actif et trimestre.
+    """Applique les règles point-in-time aux tables SUBMISSION et INFOTABLE des jeux 13F de la SEC.
 
-    Source : https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets
-    (un répertoire décompressé par période ; les fichiers SUBMISSION.tsv et INFOTABLE.tsv
-    sont utilisés).
-
-    Règles point-in-time :
       * seules les déclarations initiales « 13F-HR » sont retenues : les amendements
         (13F-HR/A), déposés plus tard, réécriraient l'historique ; si un gérant dépose deux
         déclarations initiales pour un même trimestre, seule la première compte ;
       * seules les déclarations déposées au plus tard à l'échéance légale (fin de trimestre
         + 45 jours) sont retenues : un dépôt tardif n'était pas connu du marché à cette date ;
-      * seules les actions ordinaires (SSHPRNAMTTYPE = 'SH', hors options PUTCALL) comptent ;
-        on compte le NOMBRE d'actions (SSHPRNAMT), insensible au changement d'unité du champ
-        VALUE (milliers de dollars avant 2023, dollars ensuite).
+      * seules les actions ordinaires (SSHPRNAMTTYPE = 'SH', hors options PUTCALL) comptent.
 
-    cusip_to_asset : correspondance CUSIP -> code actif (None = on garde le CUSIP).
-    reference_ciks : CIK des institutions « Smart Money » suivies (None = toutes).
-    Retourne un DataFrame cik, asset, period_end, filing_date, shares.
+    Retourne une ligne par ligne de portefeuille : cik, cusip, name, period_end, filing_date,
+    accession, shares (SSHPRNAMT), value (VALUE, en milliers de dollars avant 2023 puis en dollars :
+    à n'utiliser que pour pondérer les lignes d'une même déclaration).
     """
-    subs, infos = [], []
-    for directory in dataset_dirs:
-        d = Path(directory)
-        subs.append(pd.read_csv(d / "SUBMISSION.tsv", sep="\t", dtype=str))
-        infos.append(pd.read_csv(d / "INFOTABLE.tsv", sep="\t", dtype=str))
-    sub = pd.concat(subs, ignore_index=True)
-    info = pd.concat(infos, ignore_index=True)
-
     sub = sub[sub["SUBMISSIONTYPE"].str.strip() == "13F-HR"].copy()
     sub["CIK"] = sub["CIK"].astype(str).str.strip().astype(int).astype(str)
     if reference_ciks is not None:
@@ -485,20 +468,51 @@ def load_13f_positions(
     info = info[info["SSHPRNAMTTYPE"].str.strip().str.upper() == "SH"]
     if "PUTCALL" in info.columns:
         info = info[info["PUTCALL"].isna() | (info["PUTCALL"].str.strip() == "")]
-    cusip = info["CUSIP"].str.strip().str.upper()
+    info = info.assign(
+        cusip=info["CUSIP"].str.strip().str.upper(),
+        shares=pd.to_numeric(info["SSHPRNAMT"], errors="coerce"),
+        value=pd.to_numeric(info["VALUE"], errors="coerce") if "VALUE" in info.columns else np.nan,
+        name=info["NAMEOFISSUER"].str.strip() if "NAMEOFISSUER" in info.columns else "",
+    )
+    merged = info.merge(sub[["ACCESSION_NUMBER", "CIK", "FILING_DATE", "PERIODOFREPORT"]], on="ACCESSION_NUMBER")
+    merged = merged.rename(columns={"CIK": "cik", "PERIODOFREPORT": "period_end", "FILING_DATE": "filing_date",
+                                    "ACCESSION_NUMBER": "accession"})
+    return merged[["cik", "cusip", "name", "period_end", "filing_date", "accession", "shares", "value"]]
+
+
+def load_13f_positions(
+    dataset_dirs: Iterable[str | Path],
+    cusip_to_asset: Optional[Mapping[str, str]] = None,
+    reference_ciks: Optional[Iterable[str | int]] = None,
+    statutory_lag_days: int = 45,
+) -> pd.DataFrame:
+    """Lit les « Form 13F Data Sets » de la SEC (DERA) : une ligne par gérant, actif et trimestre.
+
+    Source : https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets
+    (un répertoire décompressé par période ; les fichiers SUBMISSION.tsv et INFOTABLE.tsv
+    sont utilisés). Règles point-in-time : voir filter_13f_filings. On compte le NOMBRE
+    d'actions (SSHPRNAMT), insensible au changement d'unité du champ VALUE.
+
+    cusip_to_asset : correspondance CUSIP -> code actif (None = on garde le CUSIP).
+    reference_ciks : CIK des institutions « Smart Money » suivies (None = toutes).
+    Retourne un DataFrame cik, asset, period_end, filing_date, shares.
+    """
+    subs, infos = [], []
+    for directory in dataset_dirs:
+        d = Path(directory)
+        subs.append(pd.read_csv(d / "SUBMISSION.tsv", sep="\t", dtype=str))
+        infos.append(pd.read_csv(d / "INFOTABLE.tsv", sep="\t", dtype=str))
+    rows = filter_13f_filings(pd.concat(subs, ignore_index=True), pd.concat(infos, ignore_index=True),
+                              statutory_lag_days, reference_ciks)
     if cusip_to_asset is None:
-        info = info.assign(asset=cusip)
+        rows = rows.assign(asset=rows["cusip"])
     else:
         mapping = {k.strip().upper(): v for k, v in cusip_to_asset.items()}
-        info = info.assign(asset=cusip.map(mapping)).dropna(subset=["asset"])
-    info = info.assign(shares=pd.to_numeric(info["SSHPRNAMT"], errors="coerce"))
-
-    merged = info.merge(sub[["ACCESSION_NUMBER", "CIK", "FILING_DATE", "PERIODOFREPORT"]], on="ACCESSION_NUMBER")
+        rows = rows.assign(asset=rows["cusip"].map(mapping)).dropna(subset=["asset"])
     out = (
-        merged.groupby(["CIK", "asset", "PERIODOFREPORT"])
-        .agg(shares=("shares", "sum"), filing_date=("FILING_DATE", "max"))
+        rows.groupby(["cik", "asset", "period_end"])
+        .agg(shares=("shares", "sum"), filing_date=("filing_date", "max"))
         .reset_index()
-        .rename(columns={"CIK": "cik", "PERIODOFREPORT": "period_end"})
     )
     return out[out["shares"] > 0][["cik", "asset", "period_end", "filing_date", "shares"]]
 

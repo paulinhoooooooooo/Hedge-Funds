@@ -10,10 +10,11 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 | [`backtest/flow_backtest.py`](backtest/flow_backtest.py) | Moteur de backtest : délais de publication appliqués (13F, COT, flux), sortie à trois niveaux, exécution fractionnée, métriques de risque, Matrice prédictive |
 | [`backtest/smart_money.py`](backtest/smart_money.py) | Liste Smart Money point-in-time (gérants sélectionnés sur leurs 13F passés), indice de détention à composition constante, proxy de flux gratuit à partir des volumes |
 | [`backtest/market_footprint.py`](backtest/market_footprint.py) | Troisième jambe : empreinte des grands acteurs (banques, institutions) dans le prix et le volume — zone de valeur, VWAP, ratio hausses / baisses, jours de distribution |
+| [`backtest/phase1_data.py`](backtest/phase1_data.py) | Circuit de données réelles gratuites (SEC 13F, OpenFIGI, secteurs SIC, cours Tiingo, positions des banques CFTC) — marche à suivre : [`docs/PHASE1_DONNEES_REELLES.md`](docs/PHASE1_DONNEES_REELLES.md) |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateurs Pine *Smart Money Flow Monitor* et *Empreinte des grands acteurs*, récepteur des alertes webhook |
 | [`mcp_server/`](mcp_server/) | Serveur MCP du fonds (lecture seule) : interroger le fonds en français depuis un assistant IA |
-| [`tests/`](tests/) | 37 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 47 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
 
 **Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
 gratuites, risque équilibré, TradingView gratuit, suivi des banques par le prix et le volume

@@ -464,15 +464,15 @@ Le monde synthétique contient cette empreinte **par construction**. Ces chiffre
 | Liste Smart Money | Calculée à partir des 13F et des cours | **Livrée** (`smart_money.select_smart_money`) |
 | Mesure des achats | Indice de détention à composition constante (nombre d'actions) | **Livrée** (`smart_money.smart_money_holdings_index`) |
 | Jambe rapide | Proxy calculé sur les cours et volumes des ETF sectoriels (Chaikin Money Flow 30 jours), à la place d'EPFR | **Livré** (`smart_money.flows_from_ohlcv`) |
-| Correspondance CUSIP → ticker | API OpenFIGI (gratuite) | À construire |
-| Cours quotidiens (actions et ETF, titres radiés inclus) | Source publique gratuite | À construire |
-| Univers | Actions américaines détenues par la liste Smart Money, reconstituées chaque trimestre à partir des 13F : les titres radiés depuis restent dans l'historique, donc pas de biais du survivant | À construire |
-| Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | À construire |
+| Correspondance CUSIP → ticker | API OpenFIGI (gratuite) | **Livrée** (`phase1_data.py figi`) |
+| Cours quotidiens (actions et ETF, divisions d'actions incluses) | Tiingo, offre gratuite (500 symboles par mois, 50 requêtes par heure) — Stooq bloque désormais les téléchargements automatiques | **Livrée** (`phase1_data.py prices`) |
+| Univers | Plus grosses lignes 13F de chaque trimestre (en dollars), dans la limite du quota Tiingo : les titres radiés depuis restent dans l'historique, sauf si OpenFIGI ne reconnaît plus leur code | **Livré** (`phase1_data.py universe`) |
+| Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | **Livré** (`phase1_data.py sectors`) |
 | Empreinte des grands acteurs | Calculée à partir des cours, plus hauts, plus bas et volumes | **Livrée** (`market_footprint.py`) |
-| Banques sur les contrats à terme | Rapport COT de la CFTC, catégorie « Dealer / Intermediary » | À construire |
+| Banques sur les contrats à terme | Rapport COT de la CFTC, catégorie « Dealer / Intermediary » (E-mini S&P 500 et Nasdaq-100, depuis 2006) | **Livré et testé sur données réelles** (`phase1_data.py cot`) |
 | Volumes des dark pools, titre par titre | Données « ATS » publiées par la FINRA | À construire |
 
-Les téléchargements (SEC, OpenFIGI, CFTC, FINRA, cours) ne peuvent pas partir de l'environnement de développement actuel : son accès réseau bloque ces sites. **Seule action requise des fondateurs** : autoriser ces domaines dans les réglages réseau de l'environnement, ou faire tourner l'étape de téléchargement sur un autre poste.
+L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fondateurs, dans les réglages de l'environnement : l'adresse de contact dédiée exigée par la SEC (`SEC_CONTACT_EMAIL`) et la clé du compte Tiingo gratuit. La marche à suivre complète est dans `docs/PHASE1_DONNEES_REELLES.md`.
 
 **Limite assumée du budget nul.** Le proxy volume mesure la pression acheteuse sur le marché, pas les souscriptions et rachats réels des fonds. Si la phase 1 est concluante, l'achat d'un historique de flux réels (parts en circulation des ETF, puis EPFR) sera la première dépense recommandée.
 

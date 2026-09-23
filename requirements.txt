@@ -1,5 +1,6 @@
 numpy>=1.26
 pandas>=2.2
+pyarrow>=15       # cache du circuit de données réelles (phase1_data.py)
 matplotlib>=3.8   # optionnel : graphique du backtest
 pytest>=8         # tests
 mcp>=1.2          # optionnel : serveur MCP du fonds (mcp_server/)

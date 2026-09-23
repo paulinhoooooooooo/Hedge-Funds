@@ -4,3 +4,4 @@ __pycache__/
 outputs/
 data_demo/
 alertes_tradingview.csv
+data/
