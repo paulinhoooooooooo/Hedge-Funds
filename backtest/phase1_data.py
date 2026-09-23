@@ -452,7 +452,13 @@ def stage_figi(http: Optional[Http] = None) -> None:
 
 
 def cusip_ticker_map() -> dict[str, str]:
+    """CUSIP -> symbole, limité à l'univers courant : le cache OpenFIGI garde aussi les codes
+    d'univers précédents, qui ne doivent consommer ni le quota Tiingo ni du temps de calcul."""
     cache = json.load(open(DATA / "figi.json"))
+    if (DATA / "universe.json").exists() and (DATA / "universe_ranked.parquet").exists():
+        ranked = pd.read_parquet(DATA / "universe_ranked.parquet", columns=["cusip", "rank"])
+        keep = set(universe_cusips(ranked, json.load(open(DATA / "universe.json"))["top_per_quarter"]))
+        cache = {c: v for c, v in cache.items() if c in keep}
     return {c: tiingo_symbol(v["ticker"]) for c, v in cache.items() if v}
 
 
