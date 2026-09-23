@@ -13,11 +13,11 @@ ont fourni, dans les réglages de l'environnement :
 ```bash
 pip install -r requirements.txt pyarrow
 python -m pytest -q                      # tous les tests doivent passer
-python backtest/phase1_data.py status    # SEC_CONTACT_EMAIL doit être « défini »
+python backtest/phase1_data.py status    # SEC_CONTACT_EMAIL et ALPACA doivent être « défini »
 ```
 
 Domaines autorisés nécessaires : `www.sec.gov`, `data.sec.gov`, `api.openfigi.com`,
-`publicreporting.cftc.gov`, `api.tiingo.com`, `cdn.finra.org`, `api.finra.org` (l'environnement est en accès
+`publicreporting.cftc.gov`, `api.tiingo.com`, `cdn.finra.org`, `api.finra.org`, `data.alpaca.markets` (l'environnement est en accès
 réseau « Complet » : rien à ajouter).
 
 ## 1. Étapes, dans l'ordre
@@ -34,6 +34,7 @@ réseau « Complet » : rien à ajouter).
 | Bourses privées (FINRA) | `python backtest/phase1_data.py ats` | 30 à 60 min (depuis 2022) | un fichier par semaine dans `data/phase1/ats/` |
 | Positions vendeuses (FINRA) | `python backtest/phase1_data.py short` | < 5 min | nombre de rapports et de titres |
 | Résultats et seuils de 5 % (SEC) | `python backtest/phase1_data.py events` | 5 à 20 min (certaines banques ont des milliers de dépôts) | publications de résultats, franchissements de 5 % |
+| Heure par heure et gros blocs (Alpaca) | `python backtest/phase1_data.py alpaca` | 5 à 15 min (20 dernières séances) ; ensuite chaque soir, quelques minutes | `data/phase1/hourly.csv`, un fichier par séance dans `data/phase1/blocks/` |
 | Achats des dirigeants (SEC) | `python backtest/phase1_data.py insiders` | 10 à 30 min (≈ 8 Mo par trimestre depuis 2019, puis Form 4 récents) | achats sur le marché, date du dernier jeu trimestriel |
 | Fichiers du moteur | `python backtest/phase1_data.py build` | quelques minutes | `data/phase1/engine/resume.json` (`hors_bourse: true`, `indices_radar` : les 5 tables) |
 | Noms des gérants | `python backtest/phase1_data.py names` | < 5 min | gérants identifiés |
@@ -86,5 +87,5 @@ Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de ve
    à leur habitude.
 6. Les dernières alertes du radar des grands acteurs (heure, jour, semaine, mois), avec les
    indices complémentaires : bourses privées et banques les plus actives, positions vendeuses,
-   achats des dirigeants, franchissements de 5 %.
+   achats des dirigeants, franchissements de 5 %, gros blocs (heure, montant, sens, hors bourse).
 7. Le lien de la page « Desk Smart Money ».

@@ -286,3 +286,54 @@ def test_insider_purchases_from_quarterly_zip_and_form4():
                      "role": "administrateur", "value": 10000.0, "accession": "A9"}]
     assert p1.insider_purchases_from_form4(xml, "AAPL", "2026-09-01", "A9", issuer_cik=320193) == rows
     assert p1.insider_purchases_from_form4(xml, "BRK-B", "2026-09-01", "A9", issuer_cik=1067983) == []
+
+
+class FakeAlpaca:
+    """Réplique de l'API Alpaca : pages successives, jeton de page suivante."""
+
+    def __init__(self, pages):
+        self.pages, self.calls = list(pages), []
+
+    def get(self, url, params=None, headers=None):
+        self.calls.append((url, dict(params or {})))
+        return json.dumps(self.pages.pop(0)).encode()
+
+
+def test_alpaca_pagination_merges_symbols():
+    fake = FakeAlpaca([
+        {"bars": {"AAPL": [{"t": "2026-09-22T13:00:00Z", "h": 1, "l": 1, "c": 1, "v": 10, "n": 2, "vw": 1}]},
+         "next_page_token": "abc"},
+        {"bars": {"AAPL": [{"t": "2026-09-22T14:00:00Z", "h": 2, "l": 2, "c": 2, "v": 20, "n": 2, "vw": 2}],
+                  "BRK.B": [{"t": "2026-09-22T13:00:00Z", "h": 3, "l": 3, "c": 3, "v": 30, "n": 3, "vw": 3}]},
+         "next_page_token": None},
+    ])
+    raw = p1.alpaca_query(fake, "bars", ["AAPL", "BRK.B"], {"timeframe": "1Hour"})
+    assert len(raw["AAPL"]) == 2 and fake.calls[1][1]["page_token"] == "abc"
+    assert fake.calls[0][1]["feed"] == "sip"
+    bars = p1.bars_frame(raw, ["AAPL", "BRK-B"])
+    assert set(bars["asset"]) == {"AAPL", "BRK-B"}
+    assert bars["time"].iloc[0] == pd.Timestamp("2026-09-22 09:00")  # heure de New York
+
+
+def test_hot_minutes_need_big_volume_and_big_trades():
+    times = pd.date_range("2026-09-22 09:30", periods=390, freq="min")
+    bars = pd.DataFrame({"asset": "AAPL", "time": times, "high": 1.0, "low": 1.0, "close": 1.0,
+                         "volume": 1000.0, "trades": 10.0, "vwap": 1.0})
+    bars.loc[100, ["volume", "trades"]] = [10_000.0, 10.0]  # peu de transactions, très grosses
+    bars.loc[200, ["volume", "trades"]] = [10_000.0, 100.0]  # beaucoup de petites transactions
+    hot = p1.hot_minutes(bars)
+    assert list(hot["time"]) == [times[100]]
+
+
+def test_block_trades_filter_conditions_and_infer_side():
+    trades = [
+        {"t": "2026-09-22T15:00:00Z", "p": 100.0, "s": 100, "x": "Q", "c": ["@"]},
+        {"t": "2026-09-22T15:00:01Z", "p": 100.5, "s": 20_000, "x": "D", "c": ["@"]},  # 2 M$ hors bourse, hausse
+        {"t": "2026-09-22T15:00:02Z", "p": 100.5, "s": 30_000, "x": "N", "c": ["@", "W"]},  # prix moyen : exclu
+        {"t": "2026-09-22T15:00:03Z", "p": 100.1, "s": 15_000, "x": "N", "c": ["@"]},  # 1,5 M$ en baisse
+        {"t": "2026-09-22T15:00:04Z", "p": 100.1, "s": 500, "x": "N", "c": ["@"]},
+    ]
+    blocks = p1.block_trades(trades, "AAPL")
+    assert [(b["venue"], b["side"], b["size"]) for b in blocks] == [("hors bourse", 1.0, 20_000.0),
+                                                                    ("bourse", -1.0, 15_000.0)]
+    assert blocks[0]["time"] == "11:00:01" and blocks[0]["date"] == pd.Timestamp("2026-09-22")

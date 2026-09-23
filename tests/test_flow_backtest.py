@@ -117,8 +117,12 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
     insiders.loc[insiders["filing_date"] >= cutoff, "value"] *= 100.0
     filings = ex.filings_5pct.copy()
     filings.loc[filings["filing_date"] >= cutoff, "form"] = "SC 13D"
+    blocks = ex.blocks.copy()
+    late = blocks["date"] > cutoff  # blocs d'une séance connus 15 minutes après sa clôture
+    blocks.loc[late, "side"] = -blocks.loc[late, "side"]
+    blocks.loc[late, "notional"] *= 20.0
     extras = fb.RadarExtras(ats=ats, short_interest=short, insiders=insiders, filings_5pct=filings,
-                            earnings=ex.earnings)  # dates de résultats : annoncées à l'avance
+                            earnings=ex.earnings, blocks=blocks)  # dates de résultats : annoncées à l'avance
 
     perturbed = fb.MarketData(prices=prices, holdings=h, flows=flows, aum=aum, assets=synthetic.assets,
                               high=high, low=low, volume=volume, offexchange=offx, offexchange_short=offx_short,

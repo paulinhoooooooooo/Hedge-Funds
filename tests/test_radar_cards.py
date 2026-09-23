@@ -235,3 +235,32 @@ def test_five_percent_wave_from_one_manager_is_ignored():
     radar = ir.compute_radar(close5 * 1.01, close5 * 0.99, close5, vol5,
                              extras=ir.RadarExtras(filings_5pct=f5.iloc[:2]))
     assert radar.evidence["cinq_pourcent"]["X"].iloc[201] == 0.5
+
+
+def test_block_trades_evidence_needs_several_blocks_on_one_side():
+    high, low, close, volume = quiet_market()  # ≈ 100 M$ échangés par séance
+    days = close.index[-4:]
+    blocks = pd.DataFrame({"asset": "X", "date": np.repeat(days[:3], 2), "time": "11:00:00", "price": 100.0,
+                           "size": 20_000.0, "notional": 2e6, "venue": ["hors bourse", "bourse"] * 3,
+                           "side": [1.0, 1.0, 1.0, 1.0, 1.0, -1.0]})
+    radar = ir.compute_radar(high, low, close, volume, extras=ir.RadarExtras(blocks=blocks))
+    pts = radar.evidence["gros_blocs"]["X"]
+    assert pts.loc[days[0]] == 0.0  # 2 blocs seulement
+    assert pts.loc[days[2]] == 1.0  # 6 blocs, 12 M$, 67 % à l'achat
+    text = radar.explain("X", len(close) - 2)
+    assert "6 transactions d'au moins 1 M$" in text and "dont 3 hors bourse" in text
+
+
+def test_hourly_view_counts_only_for_the_last_session():
+    high, low, close, volume = quiet_market()
+    rows = []
+    for d in close.index[-22:]:
+        for hour in range(10, 16):
+            rows.append((d + pd.Timedelta(hours=hour), 100.0, 99.0, 99.9, 4e5 if (d == close.index[-1] and hour == 11) else 1e5))
+    bars = pd.DataFrame(rows, columns=["time", "high", "low", "close", "volume"]).set_index("time")
+    radar = ir.compute_radar(high, low, close, volume, hourly={"X": bars})
+    assert radar.hourly["X"]["state"] == 1 and radar.hourly["X"]["time"].hour == 11
+    assert "Heure (11h-12h" in radar.explain("X", len(close) - 1)
+    old = ir.compute_radar(high.iloc[:-1], low.iloc[:-1], close.iloc[:-1], volume.iloc[:-1], hourly={"X": bars})
+    base = ir.compute_radar(high.iloc[:-1], low.iloc[:-1], close.iloc[:-1], volume.iloc[:-1])
+    pd.testing.assert_frame_equal(old.score, base.score)  # heures d'une autre séance : ignorées

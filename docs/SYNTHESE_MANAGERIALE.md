@@ -5,7 +5,7 @@
 |---|---|
 | **Rédigé par** | Direction de la Technologie (CTO) et Direction des Investissements (CIO) |
 | **Version** | v1.4 — 23/09/2026 — décisions des fondateurs (§9) ; empreinte des grands acteurs (§1.3) ; radar heure / jour / semaine / mois et indices gratuits complémentaires (§1.4) ; serveur MCP (§4.4) ; fiches de trade et « Desk Smart Money » (§4.5) |
-| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/market_footprint.py` (empreinte prix / volume), `backtest/institutional_radar.py` (radar des grands acteurs), `backtest/trade_cards.py` (fiches de trade), `backtest/dashboard.py` (page « Desk Smart Money »), `backtest/phase1_data.py` (données réelles gratuites), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `mcp_server/` (serveur MCP du fonds), `tests/` (68 tests) |
+| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/market_footprint.py` (empreinte prix / volume), `backtest/institutional_radar.py` (radar des grands acteurs), `backtest/trade_cards.py` (fiches de trade), `backtest/dashboard.py` (page « Desk Smart Money »), `backtest/phase1_data.py` (données réelles gratuites), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `mcp_server/` (serveur MCP du fonds), `tests/` (73 tests) |
 
 ---
 
@@ -93,7 +93,7 @@ Les données de Bourse sont anonymes : personne ne voit *qui* achète. Le radar 
 
 | Unité de temps | Comparée à | Ce que le radar cherche |
 |---|---|---|
-| **Heure** | la même heure des 20 séances précédentes (l'ouverture est toujours plus active) | un volume au moins 3 fois la normale, clôture de l'heure dans le haut ou le bas de sa fourchette |
+| **Heure** | la même heure des 20 séances précédentes (l'ouverture est toujours plus active) | l'heure la plus anormale de la séance : un volume au moins 3 fois la normale, clôture de l'heure dans le haut ou le bas de sa fourchette (toutes les bourses, compte gratuit Alpaca) |
 | **Jour** | les 120 séances précédentes | un volume au moins 2,5 fois la normale avec une pression nette (Chaikin Money Flow ≥ 0,15 en valeur absolue) |
 | **Semaine** (5 séances) | les 26 semaines précédentes | un volume au moins 1,8 fois la normale ; ou une **accumulation discrète** : volume élevé sans mouvement de prix, quelqu'un absorbe les ventes |
 | **Mois** (21 séances) | les 12 mois précédents | un volume au moins 1,4 fois la normale ; ou une accumulation discrète |
@@ -111,21 +111,22 @@ Les données de Bourse sont anonymes : personne ne voit *qui* achète. Le radar 
 | **Positions vendeuses déclarées** | FINRA, deux fois par mois (environ 11 jours) | baisse de 15 % ou plus : les vendeurs à découvert se retirent ; hausse de 15 % : les paris à la baisse augmentent | ±0,5 |
 | **Achats des dirigeants** | SEC, Form 4 (2 jours) | au moins deux dirigeants ou gros actionnaires achètent sur le marché, ou 1 M$ achetés, en 3 mois ; les fiches donnent leurs noms et fonctions | +1 |
 | **Franchissement de 5 % du capital** | SEC, 13D / 13G (10 jours au plus) | un investisseur dépasse 5 % : 13D s'il veut peser sur l'entreprise, 13G s'il est passif ; les fiches donnent son nom. Une vague de dépôts d'un même gérant (réorganisation administrative) est ignorée | +1 / +0,5 |
+| **Gros blocs** | Alpaca, compte gratuit : détail des transactions de toutes les bourses, 15 minutes après | les minutes où le volume explose avec très peu de transactions, puis, dans ces minutes, les transactions d'au moins 1 M$ : sens (achat ou vente), bourse ou hors bourse. Au moins 3 blocs sur 5 séances, pesant 1 % des capitaux échangés, à 60 % dans le même sens | ±1 |
 | **Filtre des jours d'événement** | SEC, 8-K rubrique 2.02 (dates de résultats) ; calendrier des échéances | la veille, le jour et le lendemain des résultats, les échéances mensuelles d'options et les rééquilibrages d'indices ne comptent ni dans le « jour » ni dans les jours d'accumulation | — |
 
-**Ce qui n'existe pas gratuitement.** Les réseaux sociaux (X / Twitter) : l'API n'a plus d'offre gratuite, et les comptes qui publient des « flux d'options » revendent des données payantes, souvent sans vérification ; le fonds ne s'en sert pas. Le détail des transactions pendant la séance (gros blocs, balayages de plusieurs bourses) est gratuit en léger différé chez certains courtiers (compte gratuit à ouvrir par les fondateurs) : ce sera la prochaine brique.
+**Ce qui n'existe pas gratuitement.** Les réseaux sociaux (X / Twitter) : l'API n'a plus d'offre gratuite, et les comptes qui publient des « flux d'options » revendent des données payantes, souvent sans vérification ; le fonds ne s'en sert pas. Le temps réel complet (toutes les bourses, sans délai) coûte environ 99 $ par mois chez Alpaca ; le fonds se contente du différé de 15 minutes, suffisant pour une analyse du soir.
 
 **Score** : heure 0,5 ; jour 1 ; semaine 1,5 ; mois 2 ; plus les points des indices ci-dessus. **Alerte à partir de ±2,5**, c'est-à-dire au moins deux traces concordantes. Dans le moteur :
 - une alerte de distribution interdit d'acheter ;
 - une alerte d'accumulation fait passer le candidat devant les autres.
 
-**Décision des fondateurs : niveau gratuit, chaque soir** (alerte le lendemain matin). Le niveau payant — lecture de toutes les transactions pendant la séance (gros blocs, achats répétés au même prix, balayages de plusieurs bourses, options inhabituelles) — reste possible plus tard. L'heure n'est disponible gratuitement que sur la bourse IEX (2 à 3 % des échanges) : elle compte donc peu.
+**Décision des fondateurs : niveau gratuit, chaque soir** (alerte le lendemain matin). Le compte gratuit Alpaca donne toutes les bourses avec 15 minutes de retard : l'heure et les gros blocs sont donc lus sur 100 % des échanges. Le niveau payant — temps réel pendant la séance, options inhabituelles — reste possible plus tard.
 
 **Limites.**
 - Le filtre des jours d'événement ne couvre pas tout : une annonce imprévue (rachat, procès, produit) crée aussi un volume anormal.
 - La part hors bourse inclut les ordres des particuliers, que les courtiers exécutent eux-mêmes.
 - Les chiffres des bourses privées arrivent 2 à 4 semaines après les échanges : ils confirment une accumulation, ils ne l'annoncent pas.
-- Dans le marché simulé, 6 mois après une alerte d'achat, l'action a monté 57 fois sur 100 (+3,6 % en moyenne) : un avantage faible, comme on peut s'y attendre d'un signal de court terme.
+- Dans le marché simulé, 6 mois après une alerte d'achat, l'action a monté 57 fois sur 100 (+3,7 % en moyenne) : un avantage faible, comme on peut s'y attendre d'un signal de court terme.
 
 ---
 
@@ -464,13 +465,13 @@ Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
 | | Sans empreinte | Avec empreinte |
 |---|---|---|
 | Sharpe | 1.00 | **1.16** |
-| Rendement annuel | +11.3 % | **+12.4 %** |
-| Pire perte moyenne | −14.8 % | **−13.3 %** |
-| Détention médiane / turnover | 518 j / 1.6× | 315 j / 2.7× |
+| Rendement annuel | +11.4 % | **+12.4 %** |
+| Pire perte moyenne | −15.2 % | **−13.4 %** |
+| Détention médiane / turnover | 519 j / 1.6× | 315 j / 2.7× |
 
 Le monde synthétique contient cette empreinte **par construction**. Ces chiffres montrent que la jambe fonctionne comme prévu, pas qu'elle rapportera autant en réel. Un premier calibrage, où un « jour de distribution » exigeait seulement un volume supérieur à la veille, se déclenchait sur le bruit : 165 allers-retours et une détention médiane de 6 mois. D'où la règle durcie à 1,2 × le volume moyen.
 
-**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.13, contre 1.16 avec les vrais délais : **pas d'avantage fictif systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
+**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.12, contre 1.16 avec les vrais délais : **pas d'avantage fictif systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
 
 ![Backtest synthétique](img/backtest_synthetique.png)
 
@@ -542,6 +543,7 @@ Le monde synthétique contient cette empreinte **par construction**. Ces chiffre
 | Positions vendeuses déclarées | API FINRA, deux fois par mois (depuis 2019) | **Livré, testé sur données réelles** (`phase1_data.py short`) |
 | Dates de résultats, franchissements de 5 % (avec le nom du déclarant) | SEC : liste des dépôts de chaque société (8-K, 13D, 13G) | **Livré, testé sur données réelles** (`phase1_data.py events`) |
 | Achats des dirigeants | SEC : jeux trimestriels « Insider Transactions », puis Form 4 lus un par un depuis le dernier jeu | **Livré, testé sur données réelles** (`phase1_data.py insiders`) |
+| Heure par heure et gros blocs, toutes bourses | Alpaca, compte d'essai gratuit (barres horaires et à la minute, détail des transactions, 15 minutes après) | **Livré, testé sur répliques** ; clés enregistrées par les fondateurs le 23/09/2026, premier passage réel à faire (`phase1_data.py alpaca`) |
 
 L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fondateurs, dans les réglages de l'environnement : l'adresse de contact dédiée exigée par la SEC (`SEC_CONTACT_EMAIL`) et la clé du compte Tiingo gratuit. La marche à suivre complète est dans `docs/PHASE1_DONNEES_REELLES.md`.
 
@@ -578,5 +580,5 @@ L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fon
 | Règle de sortie | **Deux jambes sur trois** pour une sortie totale, une seule pour un allègement | Aucune source seule ne fait vendre toute la ligne ; la jambe lente (13F) n'est plus indispensable pour sortir |
 | MCP et TradingView | **Pas de serveur branché sur le compte TradingView** ; serveur MCP du fonds, en lecture seule | Conditions d'utilisation, licences des Bourses, sécurité (§4.4) |
 | Radar | Seuils de volume : heure ×3, jour ×2,5, semaine ×1,8, mois ×1,4 ; pression ≥ 0,15 ; poids 0,5 / 1 / 1,5 / 2 ; alerte à ±2,5 | Deux unités de temps concordantes au minimum : un pic isolé est trop souvent du bruit (résultats, échéances) |
-| Indices complémentaires du radar | ±0,5 point par indice (divergence, jours d'accumulation, force relative, bourses privées, positions vendeuses) ; +1 pour les achats de dirigeants et les 13D, +0,5 pour les 13G ; filtre des jours d'événement | Un indice seul ne déclenche jamais d'alerte ; les données publiées avec retard ne comptent qu'à partir du lendemain de leur publication (vérifié par le test de perturbation) |
+| Indices complémentaires du radar | ±0,5 point par indice (divergence, jours d'accumulation, force relative, bourses privées, positions vendeuses) ; +1 pour les achats de dirigeants et les 13D, +0,5 pour les 13G ; ±1 pour les gros blocs (au moins 1 M$ par transaction, 3 sur 5 séances, 1 % des capitaux échangés, 60 % dans un sens ; enchères d'ouverture et de clôture et transactions à prix moyen exclues) ; filtre des jours d'événement | Un indice seul ne déclenche jamais d'alerte ; les données publiées avec retard ne comptent qu'à partir du lendemain de leur publication (vérifié par le test de perturbation) |
 | Historique des fiches | Épisodes de signal (premier jour après 20 séances sans signal), issues à 3 et 6 mois connues à la date | Une même accumulation n'est comptée qu'une fois ; aucun regard vers le futur |

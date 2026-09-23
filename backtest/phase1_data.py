@@ -30,6 +30,9 @@ arrêtée ; `all` les enchaîne) :
             (13D / 13G) avec le nom du déclarant                               [SEC_CONTACT_EMAIL]
   insiders  achats des dirigeants sur le marché (Form 4, code P) : jeux trimestriels de la SEC,
             complétés par les Form 4 déposés depuis                          [SEC_CONTACT_EMAIL]
+  alpaca    barres horaires de toutes les bourses (unité de temps « heure » du radar) et gros
+            blocs d'au moins 1 M$ repérés dans le détail des transactions, 15 minutes après
+                                                    [ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY]
   build     liste Smart Money, indice de détention, proxy de flux -> data/phase1/engine/
   names     noms des gérants de la liste Smart Money (SEC)                   [SEC_CONTACT_EMAIL]
   buyers    qui a acheté ou vendu chaque action, trimestre par trimestre -> fiches de trade
@@ -38,6 +41,7 @@ Identifiants (jamais dans le code ni dans la conversation) :
   SEC_CONTACT_EMAIL  adresse de contact exigée par la SEC pour tout téléchargement automatique
   TIINGO_API_KEY     clé Tiingo ; inutile si elle est enregistrée dans les « API credentials »
                      de l'environnement (en-tête Authorization: Token … ajouté automatiquement)
+  ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY   clés du compte d'essai (« Paper ») gratuit Alpaca
 
 Usage :
     python backtest/phase1_data.py status
@@ -88,6 +92,11 @@ SHORT_PUBLICATION_DAYS = 11  # positions arrêtées au 15 et en fin de mois, pub
 SEC_INSIDER_PAGE = "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
 SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{document}"
 EVENTS_START = "2019-01-01"
+ALPACA_DATA = "https://data.alpaca.markets/v2/stocks/{kind}"
+BLOCK_MIN_NOTIONAL = 1e6  # un « gros bloc » : au moins 1 M$ en une seule transaction
+# Transactions exclues : prix moyen ou dérivé d'un autre produit, prix antérieur, hors séquence,
+# ouvertures et clôtures officielles (enchères mécaniques)
+BLOCK_EXCLUDED_CONDITIONS = {"B", "W", "4", "P", "Z", "U", "M", "Q", "O", "6", "5", "9"}
 FIVE_PCT_FORMS = {"SC 13D", "SC 13G", "SCHEDULE 13D", "SCHEDULE 13G"}  # déclarations initiales uniquement
 
 # ETF sectoriels SPDR (jambe rapide) et marché large ; un ETF lancé tardivement est prolongé
@@ -925,6 +934,163 @@ def stage_insiders(http: Optional[Http] = None, since: str = EVENTS_START) -> No
           f"(jeux trimestriels jusqu'au {covered:%d/%m/%Y}, Form 4 lus ensuite)")
 
 
+# =============================================================================
+# Étape « alpaca » : heure par heure et gros blocs (toutes les bourses, 15 minutes après)
+# =============================================================================
+
+def alpaca_http() -> Http:
+    key = os.environ.get("ALPACA_API_KEY_ID", "").strip()
+    secret = os.environ.get("ALPACA_API_SECRET_KEY", "").strip()
+    if not key or not secret:
+        sys.exit("ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY absents (variables d'environnement).")
+    # Offre gratuite : 200 requêtes par minute.
+    return Http(headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret, "Accept": "application/json",
+                         "User-Agent": "FlowFund-Research/1.0"}, min_interval=0.32)
+
+
+def alpaca_query(http: Http, kind: str, symbols: list[str], params: dict) -> dict[str, list[dict]]:
+    """Barres ou transactions de plusieurs titres, page par page (10 000 lignes au plus par page)."""
+    out: dict[str, list[dict]] = {}
+    token = None
+    while True:
+        query = {"symbols": ",".join(symbols), "limit": 10000, "feed": "sip", **params}
+        if token:
+            query["page_token"] = token
+        page = json.loads(http.get(ALPACA_DATA.format(kind=kind), params=query))
+        for sym, rows in (page.get(kind) or {}).items():
+            out.setdefault(sym, []).extend(rows)
+        token = page.get("next_page_token")
+        if not token:
+            return out
+
+
+def new_york_time(values) -> pd.Series:
+    """Horodatage UTC (RFC 3339) -> heure de New York, sans fuseau."""
+    ts = pd.to_datetime(pd.Series(values), utc=True).dt.tz_convert("America/New_York")
+    return ts.dt.tz_localize(None).astype("datetime64[ns]")
+
+
+def bars_frame(raw: dict[str, list[dict]], assets: Iterable[str]) -> pd.DataFrame:
+    back = {ats_symbol(a): a for a in assets}
+    frames = []
+    for sym, rows in raw.items():
+        if rows and sym in back:
+            df = pd.DataFrame(rows)
+            frames.append(pd.DataFrame({"asset": back[sym], "time": new_york_time(df["t"]).to_numpy(),
+                                        "high": df["h"].to_numpy(), "low": df["l"].to_numpy(),
+                                        "close": df["c"].to_numpy(), "volume": df["v"].to_numpy(),
+                                        "trades": df.get("n", pd.Series(np.nan, index=df.index)).to_numpy(),
+                                        "vwap": df.get("vw", pd.Series(np.nan, index=df.index)).to_numpy()}))
+    cols = ["asset", "time", "high", "low", "close", "volume", "trades", "vwap"]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)
+
+
+def regular_hours(bars: pd.DataFrame) -> pd.DataFrame:
+    t = pd.to_datetime(bars["time"])
+    minutes = t.dt.hour * 60 + t.dt.minute
+    return bars[(minutes >= 9 * 60 + 30) & (minutes < 16 * 60)]
+
+
+def hot_minutes(minute_bars: pd.DataFrame, per_asset: int = 3, volume_x: float = 5.0,
+                size_x: float = 3.0) -> pd.DataFrame:
+    """Minutes suspectes : volume au moins 5 fois la minute habituelle de la journée ET taille moyenne
+    des transactions au moins 3 fois l'habitude (peu de transactions, mais très grosses). Les
+    `per_asset` plus fortes par titre et par jour."""
+    b = regular_hours(minute_bars).copy()
+    if b.empty:
+        return b
+    b["day"] = pd.to_datetime(b["time"]).dt.normalize()
+    b["avg_size"] = b["volume"] / b["trades"].where(b["trades"] > 0)
+    g = b.groupby(["asset", "day"])
+    b["vol_ratio"] = b["volume"] / g["volume"].transform("median")
+    b["size_ratio"] = b["avg_size"] / g["avg_size"].transform("median")
+    hot = b[(b["vol_ratio"] >= volume_x) & (b["size_ratio"] >= size_x)]
+    return (hot.sort_values("vol_ratio", ascending=False).groupby(["asset", "day"]).head(per_asset)
+            .sort_values(["asset", "time"]).reset_index(drop=True))
+
+
+def block_trades(trades: list[dict], asset: str, min_notional: float = BLOCK_MIN_NOTIONAL) -> list[dict]:
+    """Transactions d'une fenêtre -> gros blocs. Sens par la règle du dernier écart de prix (achat si
+    le prix monte par rapport à la transaction précédente de prix différent, vente s'il baisse). Les
+    transactions notées « D » passent par un système de déclaration FINRA : hors bourse."""
+    rows, last_price, last_side = [], None, 0
+    for tr in sorted(trades, key=lambda x: x["t"]):
+        price, size = float(tr["p"]), float(tr["s"])
+        if last_price is not None and price != last_price:
+            last_side = 1 if price > last_price else -1
+        conditions = set(tr.get("c") or [])
+        if price * size >= min_notional and not conditions & BLOCK_EXCLUDED_CONDITIONS:
+            t = new_york_time([tr["t"]]).iloc[0]
+            rows.append({"asset": asset, "date": t.normalize(), "time": f"{t:%H:%M:%S}", "price": price,
+                         "size": size, "notional": price * size,
+                         "venue": "hors bourse" if tr.get("x") == "D" else "bourse", "side": float(last_side)})
+        last_price = price
+    return rows
+
+
+def market_sessions(http: Http, days: int) -> list[pd.Timestamp]:
+    """Dernières séances complètes (barres quotidiennes de SPY), la séance du jour une fois close."""
+    today = pd.Timestamp.now(tz="America/New_York")
+    raw = alpaca_query(http, "bars", [MARKET_ETF], {"timeframe": "1Day",
+                                                   "start": f"{today - pd.Timedelta(days=days * 2 + 10):%Y-%m-%d}"})
+    dates = sorted({pd.Timestamp(t).normalize() for t in new_york_time([r["t"] for r in raw.get(MARKET_ETF, [])])})
+    closed = today.tz_localize(None) >= today.tz_localize(None).normalize() + pd.Timedelta(hours=16, minutes=20)
+    dates = [d for d in dates if d < today.tz_localize(None).normalize() or closed]
+    return [pd.Timestamp(d) for d in dates[-days:]]
+
+
+def stage_alpaca(http: Optional[Http] = None, days: int = 20, hourly_sessions: int = 30) -> None:
+    if http is None and not (os.environ.get("ALPACA_API_KEY_ID") and os.environ.get("ALPACA_API_SECRET_KEY")):
+        print("Alpaca : clés absentes, étape ignorée (ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY).")
+        return
+    http = http or alpaca_http()
+    assets = sorted(set(cusip_ticker_map().values()))
+    symbols = [ats_symbol(a) for a in assets]
+    chunks = [symbols[k:k + 100] for k in range(0, len(symbols), 100)]
+    sessions = market_sessions(http, max(days, hourly_sessions))
+    if not sessions:
+        print("Alpaca : aucune séance trouvée")
+        return
+    # 1. Barres horaires des dernières séances (unité de temps « heure » du radar)
+    start = sessions[-hourly_sessions] if len(sessions) >= hourly_sessions else sessions[0]
+    raw: dict[str, list[dict]] = {}
+    for chunk in chunks:
+        for sym, rows in alpaca_query(http, "bars", chunk, {"timeframe": "1Hour", "adjustment": "split",
+                                                            "start": f"{start:%Y-%m-%d}"}).items():
+            raw.setdefault(sym, []).extend(rows)
+    hourly = bars_frame(raw, assets)
+    hourly = hourly[pd.to_datetime(hourly["time"]).dt.hour.between(9, 15)]
+    hourly.drop(columns=["trades", "vwap"]).to_csv(DATA / "hourly.csv", index=False)
+    print(f"Heure par heure : {len(hourly):,} barres, {hourly['asset'].nunique()} titres")
+    # 2. Gros blocs : minutes suspectes, puis détail des transactions de ces minutes seulement
+    folder = DATA / "blocks"
+    folder.mkdir(parents=True, exist_ok=True)
+    for day in sessions[-days:]:
+        path = folder / f"{day:%Y-%m-%d}.parquet"
+        if path.exists():
+            continue
+        raw = {}
+        for chunk in chunks:
+            for sym, rows in alpaca_query(http, "bars", chunk, {
+                    "timeframe": "1Min", "start": f"{day:%Y-%m-%d}",
+                    "end": f"{day + pd.Timedelta(days=1):%Y-%m-%d}"}).items():
+                raw.setdefault(sym, []).extend(rows)
+        hot = hot_minutes(bars_frame(raw, assets))
+        found = []
+        for r in hot.itertuples():
+            begin = pd.Timestamp(r.time).tz_localize("America/New_York").tz_convert("UTC")
+            trades = alpaca_query(http, "trades", [ats_symbol(r.asset)], {
+                "start": begin.isoformat().replace("+00:00", "Z"),
+                "end": (begin + pd.Timedelta(seconds=59.999)).isoformat().replace("+00:00", "Z")})
+            found += block_trades(trades.get(ats_symbol(r.asset), []), r.asset)
+        cols = ["asset", "date", "time", "price", "size", "notional", "venue", "side"]
+        pd.DataFrame(found, columns=cols).to_parquet(path, index=False)
+        print(f"Gros blocs du {day:%d/%m/%Y} : {len(hot)} minutes suspectes, {len(found)} blocs d'au moins 1 M$")
+    files = sorted(folder.glob("*.parquet"))
+    allb = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True) if files else pd.DataFrame()
+    allb.to_csv(DATA / "blocks.csv", index=False)
+
+
 def copy_radar_extras(stocks: Iterable[str], out_dir: Path) -> list[str]:
     """Recopie dans le dossier du moteur les indices complémentaires disponibles, titres suivis seulement."""
     stocks = set(stocks)
@@ -934,7 +1100,7 @@ def copy_radar_extras(stocks: Iterable[str], out_dir: Path) -> list[str]:
         ats = pd.concat([pd.read_parquet(f) for f in ats_files], ignore_index=True)
         ats[ats["asset"].isin(stocks)].to_csv(out_dir / "ats.csv", index=False)
         written.append("ats")
-    for table in ("short_interest", "insiders", "filings_5pct", "earnings"):
+    for table in ("short_interest", "insiders", "filings_5pct", "earnings", "blocks", "hourly"):
         src = DATA / f"{table}.csv"
         if src.exists():
             df = pd.read_csv(src, keep_default_na=False, na_values=[""])
@@ -1084,17 +1250,21 @@ def status() -> None:
     print(f"short     : {ok(DATA / 'short_interest.csv')}")
     print(f"events    : {ok(DATA / 'filings_5pct.csv')}")
     print(f"insiders  : {ok(DATA / 'insiders.csv')}")
+    n_blocks = len(list((DATA / 'blocks').glob('*.parquet'))) if (DATA / 'blocks').exists() else 0
+    print(f"alpaca    : {ok(DATA / 'hourly.csv')} (heure par heure) ; gros blocs : {n_blocks} séance(s)")
     print(f"build     : {ok(DATA / 'engine' / 'resume.json')}")
     print(f"names     : {ok(DATA / 'names.json')}")
     print(f"buyers    : {ok(DATA / 'engine' / 'smart_money_buyers.csv')}")
     print(f"SEC_CONTACT_EMAIL {'défini' if os.environ.get('SEC_CONTACT_EMAIL') else 'ABSENT'} ; "
-          f"TIINGO_API_KEY {'défini' if os.environ.get('TIINGO_API_KEY') else 'absent (identifiants de l environnement ?)'}")
+          f"TIINGO_API_KEY {'défini' if os.environ.get('TIINGO_API_KEY') else 'absent (identifiants de l environnement ?)'} ; "
+          f"ALPACA {'défini' if os.environ.get('ALPACA_API_KEY_ID') and os.environ.get('ALPACA_API_SECRET_KEY') else 'ABSENT'}")
 
 
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Circuit de données réelles de la phase 1")
     parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
-                                          "cot", "ats", "short", "events", "insiders", "build", "names", "buyers"])
+                                          "cot", "ats", "short", "events", "insiders", "alpaca", "build", "names",
+                                          "buyers"])
     parser.add_argument("--max-symbols", type=int, default=488,
                         help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
@@ -1103,6 +1273,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
         "sectors": stage_sectors, "prices": stage_prices, "finra": stage_finra, "cot": stage_cot,
         "ats": stage_ats, "short": stage_short, "events": stage_events, "insiders": stage_insiders,
+        "alpaca": stage_alpaca,
         "build": lambda: print(json.dumps(build_engine_files(), indent=1, ensure_ascii=False)),
         "names": stage_names, "buyers": stage_buyers,
     }

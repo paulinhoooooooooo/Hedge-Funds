@@ -201,7 +201,10 @@ class MarketData:
     offexchange, offexchange_short : DataFrame [date x actif], optionnels — volume échangé hors
                bourse et volume vendu à découvert hors bourse (fichiers FINRA « Reg SHO »)
     extras   : RadarExtras, optionnel — autres indices gratuits du radar (bourses privées, positions
-               vendeuses déclarées, achats des dirigeants, franchissements de 5 %, dates de résultats)
+               vendeuses déclarées, achats des dirigeants, franchissements de 5 %, dates de résultats,
+               gros blocs)
+    hourly   : DataFrame long, optionnel — asset, time, high, low, close, volume : barres horaires des
+               dernières séances (heure de New York), pour l'unité de temps « heure » du radar
     """
 
     prices: pd.DataFrame
@@ -215,6 +218,7 @@ class MarketData:
     offexchange: Optional[pd.DataFrame] = None
     offexchange_short: Optional[pd.DataFrame] = None
     extras: Optional[RadarExtras] = None
+    hourly: Optional[pd.DataFrame] = None
 
     @property
     def has_ohlcv(self) -> bool:
@@ -402,7 +406,7 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
     short = np.clip(0.46 + 0.04 * reg + 0.05 * rng_v.standard_normal((n_t, n_a)), 0.05, 0.95)
     offexchange = pd.DataFrame(np.where(equity, volume.to_numpy() * share, np.nan), index=cal, columns=names)
     offexchange_short = offexchange * short
-    extras = _synthetic_radar_extras(cal, names, equity, reg, volume, seed)
+    extras = _synthetic_radar_extras(cal, names, equity, reg, volume, seed, program=program, close=prices)
 
     return MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets,
                       high=high, low=low, volume=volume, offexchange=offexchange,
@@ -410,18 +414,20 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
 
 
 def _synthetic_radar_extras(cal: pd.DatetimeIndex, names: list[str], equity: np.ndarray, reg: np.ndarray,
-                            volume: pd.DataFrame, seed: int) -> RadarExtras:
+                            volume: pd.DataFrame, seed: int, program: Optional[np.ndarray] = None,
+                            close: Optional[pd.DataFrame] = None) -> RadarExtras:
     """Indices complémentaires fictifs pour les actions (générateur séparé : cours et volumes inchangés).
 
     Pendant l'accumulation, les institutions passent davantage par les bourses privées et les
     plateformes de blocs, les vendeurs à découvert se retirent, les dirigeants et de grands
     investisseurs achètent plus souvent ; l'inverse en distribution. Chaque donnée porte sa date
     de publication réelle (FINRA : 3 semaines pour les bourses privées, 11 jours pour les positions
-    vendeuses ; SEC : 2 jours pour les Form 4, 10 jours pour les 13D / 13G)."""
+    vendeuses ; SEC : 2 jours pour les Form 4, 10 jours pour les 13D / 13G). Les programmes d'achat ou
+    de vente des institutions laissent des gros blocs, surtout hors bourse."""
     rng = np.random.default_rng(seed + 20_000)
     banks = sorted(set(BANK_VENUES.values()))
     reg_df = pd.DataFrame(reg, index=cal, columns=names)
-    ats, short_rows, insiders, filings, earnings = [], [], [], [], []
+    ats, short_rows, insiders, filings, earnings, blocks = [], [], [], [], [], []
     weekly_volume = volume.resample("W-MON", label="left", closed="left").sum()
     settlements = pd.DatetimeIndex(sorted(set(
         list(pd.date_range(cal[0], cal[-1], freq="SMS") + pd.Timedelta(days=14))
@@ -458,6 +464,17 @@ def _synthetic_radar_extras(cal: pd.DatetimeIndex, names: list[str], equity: np.
         # Résultats trimestriels : 3 à 5 semaines après la fin du trimestre
         for q in quarter_ends:
             earnings.append((name, q + pd.Timedelta(days=int(rng.integers(21, 36)))))
+        # Gros blocs : pendant les programmes des institutions, et quelques-uns au hasard
+        if program is not None and close is not None:
+            dollars = (close[name] * volume[name]).to_numpy()
+            noise = rng.random(len(cal)) < 0.02
+            for t in np.nonzero((program[:, j] != 0) | noise)[0]:
+                side = program[t, j] if program[t, j] != 0 and rng.random() < 0.8 else rng.choice([-1.0, 1.0])
+                for _ in range(int(rng.integers(1, 4))):
+                    notional = max(1e6, dollars[t] * rng.uniform(0.003, 0.012))
+                    price = float(close[name].iat[t])
+                    blocks.append((name, cal[t], "15:30:00", price, round(notional / price), notional,
+                                   "hors bourse" if rng.random() < 0.6 else "bourse", float(side)))
     return RadarExtras(
         ats=pd.DataFrame(ats, columns=["asset", "week_start", "published", "ats_volume", "block_volume",
                                        "bank_volume", "banks"]),
@@ -465,6 +482,7 @@ def _synthetic_radar_extras(cal: pd.DatetimeIndex, names: list[str], equity: np.
         insiders=pd.DataFrame(insiders, columns=["asset", "filing_date", "owner", "role", "value"]),
         filings_5pct=pd.DataFrame(filings, columns=["asset", "filing_date", "form", "filer"]),
         earnings=pd.DataFrame(earnings, columns=["asset", "date"]),
+        blocks=pd.DataFrame(blocks, columns=["asset", "date", "time", "price", "size", "notional", "venue", "side"]),
     )
 
 
@@ -485,6 +503,8 @@ def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
         sx = data.offexchange_short.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset",
                                                                             value_name="short_volume")
         ox.merge(sx, on=["date", "asset"]).dropna(subset=["total_volume"]).to_csv(out / "offexchange.csv", index=False)
+    if data.hourly is not None:
+        data.hourly.to_csv(out / "hourly.csv", index=False)
     if data.extras is not None:
         for table in RadarExtras.TABLES:
             frame = getattr(data.extras, table)
@@ -508,8 +528,9 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
                    - FX / MP   : positions longues des Asset Managers / Managed Money (COT) ;
                    - crypto    : offre des Long-Term Holders ou solde des wallets institutionnels.
     offexchange.csv (optionnel) : date, asset, total_volume, short_volume (FINRA « Reg SHO »)
-    ats.csv, short_interest.csv, insiders.csv, filings_5pct.csv, earnings.csv (optionnels) :
+    ats.csv, short_interest.csv, insiders.csv, filings_5pct.csv, earnings.csv, blocks.csv (optionnels) :
                    indices complémentaires du radar (colonnes : voir institutional_radar.RadarExtras)
+    hourly.csv (optionnel) : asset, time, high, low, close, volume (barres horaires, heure de New York)
     flows.csv    : date, vehicle, net_flow, aum
                    - ETF : net_flow = variation des parts en circulation x VL ; aum = encours ;
                    - EPFR : flux nets et encours des fonds du segment ;
@@ -545,8 +566,9 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
                 frame[col] = _as_ns(frame[col])
             tables[table] = frame
     extras = RadarExtras(**tables) if tables else None
+    hourly = pd.read_csv(d / "hourly.csv", keep_default_na=False, na_values=[""]) if (d / "hourly.csv").exists() else None
     data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv, **offx,
-                      extras=extras)
+                      extras=extras, hourly=hourly)
     data.validate()
     return data
 
@@ -844,8 +866,12 @@ def compute_signals(data: MarketData, cfg: StrategyConfig) -> Signals:
         vehicle = data.assets["flow_vehicle"]
         sizes = vehicle.map(vehicle.value_counts())
         extras.groups = vehicle.where(sizes >= 3, data.assets["asset_class"]).to_dict()  # secteur, sinon classe
+        hourly = None
+        if data.hourly is not None and len(data.hourly):
+            hourly = {a: g.set_index("time")[["high", "low", "close", "volume"]].sort_index()
+                      for a, g in data.hourly.assign(time=_as_ns(data.hourly["time"])).groupby("asset") if a in names}
         radar = compute_radar(aligned(data.high), aligned(data.low), raw, aligned(data.volume), offx, offx_short,
-                              extras=extras)
+                              hourly=hourly, extras=extras)
         entry = entry & ~(radar.score <= -ALERT_THRESHOLD)
         score = score + 0.01 * radar.score
 

@@ -21,7 +21,7 @@ TRACES, puis les recoupe entre unités de temps. Pour chaque unité de temps :
 
 Unités de temps (fenêtres glissantes, calculées chaque séance avec les seules données connues) :
   heure    dernière heure de cotation vs la même heure des 20 séances précédentes (données
-           horaires optionnelles ; le volume horaire gratuit de Tiingo ne couvre que la bourse IEX)
+           horaires de toutes les bourses, 15 minutes après, avec le compte gratuit Alpaca)
   jour     la séance vs les 120 séances précédentes
   semaine  les 5 dernières séances vs les 26 semaines précédentes
   mois     les 21 dernières séances vs les 12 mois précédents
@@ -35,6 +35,8 @@ Autres indices, gratuits, qui s'ajoutent au score (RadarExtras) :
     banques (UBS, JPMorgan, Morgan Stanley, Goldman Sachs…) ;
   * positions vendeuses déclarées (FINRA, deux fois par mois) ;
   * achats des dirigeants sur le marché (Form 4) et franchissements de 5 % du capital (13D/13G) ;
+  * gros blocs (transactions d'au moins 1 M$) repérés dans le détail des transactions de toutes les
+    bourses, 15 minutes après (compte gratuit Alpaca) ;
   * filtre des jours d'événement (résultats, échéances d'options, rééquilibrages d'indices) : le
     volume de ces séances est mécanique et n'est pas compté.
 
@@ -103,6 +105,8 @@ class RadarExtras:
     insiders       asset, filing_date, owner, role, value (Form 4, achats sur le marché, code P)
     filings_5pct   asset, filing_date, form, filer (13D / 13G initiaux, hors amendements)
     earnings       asset, date (publication des résultats : 8-K, rubrique 2.02)
+    blocks         asset, date, time, price, size, notional, venue, side (gros blocs repérés dans le
+                   détail des transactions, 15 minutes après ; side +1 achat, -1 vente, 0 inconnu)
     groups         actif -> groupe (secteur) pour la force relative
     """
 
@@ -111,11 +115,13 @@ class RadarExtras:
     insiders: Optional[pd.DataFrame] = None
     filings_5pct: Optional[pd.DataFrame] = None
     earnings: Optional[pd.DataFrame] = None
+    blocks: Optional[pd.DataFrame] = None
     groups: Optional[dict] = None
 
-    TABLES = ("ats", "short_interest", "insiders", "filings_5pct", "earnings")
+    TABLES = ("ats", "short_interest", "insiders", "filings_5pct", "earnings", "blocks")
     DATE_COLUMNS = {"ats": ("week_start", "published"), "short_interest": ("settlement", "available"),
-                    "insiders": ("filing_date",), "filings_5pct": ("filing_date",), "earnings": ("date",)}
+                    "insiders": ("filing_date",), "filings_5pct": ("filing_date",), "earnings": ("date",),
+                    "blocks": ("date",)}
 
     def is_empty(self) -> bool:
         return all(getattr(self, name) is None or len(getattr(self, name)) == 0 for name in self.TABLES)
@@ -149,7 +155,9 @@ class Radar:
         hour = self.hourly.get(asset)
         if hour and hour.get("state"):
             side = "achats" if hour["state"] > 0 else "ventes"
-            parts.append(f"Heure : volume ×{hour['volume_ratio']:.1f} la normale de ce créneau, {side} dominants.")
+            t = pd.Timestamp(hour["time"])
+            parts.append(f"Heure ({t:%H}h-{t.hour + 1}h le {t:%d/%m}) : volume ×{hour['volume_ratio']:.1f} "
+                         f"la normale de ce créneau, {side} dominants.")
         for name, view in self.views.items():
             state = view.state[asset].iloc[i]
             if state == 0 or not np.isfinite(state):
@@ -221,7 +229,8 @@ def _window_view(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, vol
 
 
 def hourly_view(bars: pd.DataFrame, sessions: int = 20) -> dict:
-    """Dernière heure de cotation vs la même heure des `sessions` séances précédentes.
+    """L'heure la plus anormale de la dernière séance, comparée à la même heure des `sessions`
+    séances précédentes.
 
     bars : index datetime, colonnes high, low, close, volume (une ligne par heure).
     Le volume d'une heure se compare à la même heure des autres jours : l'ouverture et la
@@ -230,18 +239,26 @@ def hourly_view(bars: pd.DataFrame, sessions: int = 20) -> dict:
     if bars is None or len(bars) < 10:
         return {}
     b = bars.sort_index()
-    last = b.iloc[-1]
-    same_hour = b[b.index.hour == b.index[-1].hour].iloc[:-1].tail(sessions)
-    normal = same_hour["volume"].mean()
-    if not normal or not np.isfinite(normal):
+    day = b.index.normalize()
+    today, past = b[day == day[-1]], b[day < day[-1]]
+    best = None
+    for t, row in today.iterrows():
+        same_hour = past[past.index.hour == t.hour].tail(sessions)
+        normal = same_hour["volume"].mean()
+        if len(same_hour) < 5 or not normal or not np.isfinite(normal):
+            continue
+        ratio = float(row["volume"] / normal)
+        if best is None or ratio > best[0]:
+            best = (ratio, t, row)
+    if best is None:
         return {}
-    ratio = float(last["volume"] / normal)
-    rng = last["high"] - last["low"]
-    loc = float(((last["close"] - last["low"]) - (last["high"] - last["close"])) / rng) if rng > 0 else 0.0
+    ratio, t, row = best
+    rng = row["high"] - row["low"]
+    loc = float(((row["close"] - row["low"]) - (row["high"] - row["close"])) / rng) if rng > 0 else 0.0
     state = 0
     if ratio >= HOUR_VOLUME_THRESHOLD:
         state = 1 if loc >= 0.3 else (-1 if loc <= -0.3 else 0)
-    return {"time": b.index[-1], "volume_ratio": ratio, "close_location": loc, "state": state}
+    return {"time": t, "volume_ratio": ratio, "close_location": loc, "state": state}
 
 
 def _fmt(x: float, digits: int = 0) -> str:
@@ -504,6 +521,37 @@ def _five_percent(f5: pd.DataFrame, idx: pd.DatetimeIndex, cols, days: int = 60)
     return pts, note
 
 
+def _blocks(blocks: pd.DataFrame, close: pd.DataFrame, volume: pd.DataFrame, days: int = 5):
+    """Gros blocs (transactions d'au moins 1 M$) sur les 5 dernières séances : ±1 si au moins 3 blocs,
+    pesant au moins 1 % des capitaux échangés, et à 60 % ou plus dans le même sens. Les blocs d'une
+    séance sont connus 15 minutes après la clôture, comme le volume du jour."""
+    idx, cols = close.index, close.columns
+    b = blocks[blocks["asset"].isin(cols)].copy()
+    if b.empty:
+        return None
+    b["date"] = pd.to_datetime(b["date"]).astype("datetime64[ns]").dt.normalize()
+    b["signed"] = b["notional"] * b["side"].fillna(0.0)
+    b["offx"] = (b["venue"] == "hors bourse").astype(float)
+    b["one"] = 1.0
+    daily = b.groupby(["date", "asset"])[["notional", "signed", "offx", "one"]].sum()
+    frame = lambda col: daily[col].unstack().reindex(index=idx, columns=cols)
+    roll = lambda col: frame(col).fillna(0.0).rolling(days, min_periods=1).sum()
+    total, signed, offx, count = roll("notional"), roll("signed"), roll("offx"), roll("one")
+    dollars = (close * volume).rolling(days, min_periods=1).sum()
+    weight = total / dollars.where(dollars > 0)
+    tilt = signed / total.where(total > 0)
+    heavy = (count >= 3) & (weight >= 0.01)
+    pts = _points(idx, cols).mask(heavy & (tilt >= 0.6), 1.0).mask(heavy & (tilt <= -0.6), -1.0)
+
+    def note(a, i):
+        t = tilt[a].iloc[i]
+        side = "à l'achat" if t > 0 else "à la vente"
+        return (f"Gros blocs : {int(count[a].iloc[i])} transactions d'au moins 1 M$ sur 5 séances "
+                f"({total[a].iloc[i] / 1e6:,.1f} M$, {weight[a].iloc[i]:.1%} des capitaux échangés), "
+                f"{abs(t):.0%} {side}, dont {int(offx[a].iloc[i])} hors bourse.")
+    return pts, note
+
+
 def _evidence(radar: "Radar", close: pd.DataFrame, volume: pd.DataFrame, extras: RadarExtras) -> None:
     """Ajoute au radar les indices complémentaires (points) et leur explication."""
     idx, cols = close.index, close.columns
@@ -521,6 +569,8 @@ def _evidence(radar: "Radar", close: pd.DataFrame, volume: pd.DataFrame, extras:
         families["dirigeants"] = _insiders(extras.insiders, idx, cols)
     if extras.filings_5pct is not None and len(extras.filings_5pct):
         families["cinq_pourcent"] = _five_percent(extras.filings_5pct, idx, cols)
+    if extras.blocks is not None and len(extras.blocks):
+        families["gros_blocs"] = _blocks(extras.blocks, close, volume)
     for name, found in families.items():
         if found is not None:
             radar.evidence[name], radar.notes[name] = found
@@ -554,7 +604,7 @@ def compute_radar(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, vo
     score = radar.score
     for asset, bars in (hourly or {}).items():
         view = hourly_view(bars)
-        if view:
+        if view and pd.Timestamp(view["time"]).normalize() == score.index[-1]:  # heure de la dernière séance
             radar.hourly[asset] = view
             if asset in score.columns and view["state"]:
                 score.iloc[-1, score.columns.get_loc(asset)] += HOUR_WEIGHT * view["state"]
