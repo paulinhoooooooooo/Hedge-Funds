@@ -249,3 +249,79 @@ def test_end_to_end_build_feeds_the_engine(tmp_path, monkeypatch):
     assert holdings_aaa["value"].iloc[-1] > holdings_aaa["value"].iloc[0]  # les gérants accumulent AAA
     result = fb.run_backtest(data, fb.StrategyConfig(entry_flow_threshold=0.0, exit_flow_threshold=-0.05))
     assert np.isfinite(result.metrics["sharpe"])
+
+
+# ---------------------------------------------------------------------------
+# Indices complémentaires du radar (FINRA, SEC)
+# ---------------------------------------------------------------------------
+
+def test_ats_weekly_aggregation_by_venue_type():
+    base = {"weekStartDate": "2026-08-31", "initialPublishedDate": "2026-09-21"}
+    records = [
+        {**base, "issueSymbolIdentifier": "BRK.B", "MPID": "UBSA", "totalWeeklyShareQuantity": 300},
+        {**base, "issueSymbolIdentifier": "BRK.B", "MPID": "SGMT", "totalWeeklyShareQuantity": 500},
+        {**base, "issueSymbolIdentifier": "BRK.B", "MPID": "LQNA", "totalWeeklyShareQuantity": 200},
+        {**base, "issueSymbolIdentifier": "BRK.B", "MPID": "INCR", "totalWeeklyShareQuantity": 1000},
+        {**base, "issueSymbolIdentifier": "ZZZ", "MPID": "UBSA", "totalWeeklyShareQuantity": 9},
+    ]
+    out = p1.aggregate_ats(records, ["BRK-B"])
+    row = out.iloc[0]
+    assert len(out) == 1 and row["asset"] == "BRK-B"
+    assert (row["ats_volume"], row["block_volume"], row["bank_volume"]) == (2000, 200, 800)
+    assert row["banks"] == "Goldman Sachs, UBS"
+    assert row["published"] == pd.Timestamp("2026-09-21")
+
+
+def test_short_interest_symbols_and_publication_delay():
+    records = [{"symbolCode": "BRKB", "settlementDate": "2026-08-31", "currentShortPositionQuantity": 1000,
+                "daysToCoverQuantity": 1.5},
+               {"symbolCode": "AAPL", "settlementDate": "2026-08-14", "currentShortPositionQuantity": 5}]
+    out = p1.parse_short_interest(records, ["BRK-B", "AAPL"])
+    brk = out[out["asset"] == "BRK-B"].iloc[0]
+    assert brk["available"] == pd.Timestamp("2026-08-31") + pd.Timedelta(days=p1.SHORT_PUBLICATION_DAYS)
+    assert p1.short_symbol("BRK-B") == "BRKB" and p1.ats_symbol("BRK-B") == "BRK.B"
+
+
+def test_earnings_dates_and_filer_name():
+    filings = pd.DataFrame({"form": ["8-K", "8-K", "10-Q", "SC 13G"],
+                            "items": ["2.02,9.01", "5.02", "", ""],
+                            "filingDate": ["2026-07-30", "2026-04-20", "2026-08-01", "2026-05-01"]})
+    assert p1.earnings_dates(filings) == ["2026-07-30"]
+    headers = ("SUBJECT COMPANY:\n COMPANY CONFORMED NAME: APPLE INC\n CENTRAL INDEX KEY: 0000320193\n"
+               "FILED BY:\n COMPANY DATA:\n COMPANY CONFORMED NAME: BERKSHIRE HATHAWAY INC\n"
+               " CENTRAL INDEX KEY: 0001067983\n")
+    assert p1.filer_from_headers(headers, 320193) == "Berkshire Hathaway"
+    own = "FILED BY:\n COMPANY CONFORMED NAME: NVIDIA CORP\n CENTRAL INDEX KEY: 0001045810\n"
+    assert p1.filer_from_headers(own, 1045810) == ""
+
+
+def test_insider_purchases_from_quarterly_zip_and_form4():
+    sub = ("ACCESSION_NUMBER\tFILING_DATE\tDOCUMENT_TYPE\tISSUERCIK\n"
+           "A1\t03-MAR-2025\t4\t0000320193\nA2\t04-MAR-2025\t4\t0000320193\nA3\t04-MAR-2025\t4\t0000000001\n")
+    trans = ("ACCESSION_NUMBER\tTRANS_CODE\tTRANS_SHARES\tTRANS_PRICEPERSHARE\tTRANS_ACQUIRED_DISP_CD\n"
+             "A1\tP\t100\t10.0\tA\nA1\tP\t50\t10.0\tA\nA2\tS\t100\t10.0\tD\nA3\tP\t1\t1\tA\n")
+    owners = ("ACCESSION_NUMBER\tRPTOWNERNAME\tRPTOWNER_RELATIONSHIP\tRPTOWNER_TITLE\n"
+              "A1\tCOOK TIMOTHY\tDirector,Officer\tCEO\nA2\tX\tOfficer\t\nA3\tY\tDirector\t\n")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("SUBMISSION.tsv", sub)
+        z.writestr("NONDERIV_TRANS.tsv", trans)
+        z.writestr("REPORTINGOWNER.tsv", owners)
+    out = p1.insider_purchases_from_zip(buf.getvalue(), {320193: "AAPL"})
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert (row["asset"], row["owner"], row["value"]) == ("AAPL", "Cook Timothy", 1500.0)
+    assert row["role"] == "administrateur, dirigeant — CEO"
+    xml = b"""<ownershipDocument><issuer><issuerCik>0000320193</issuerCik></issuer><reportingOwner><reportingOwnerId><rptOwnerName>DOE JANE</rptOwnerName>
+      </reportingOwnerId><reportingOwnerRelationship><isDirector>1</isDirector></reportingOwnerRelationship>
+      </reportingOwner><nonDerivativeTable><nonDerivativeTransaction><transactionCoding><transactionCode>P
+      </transactionCode></transactionCoding><transactionAmounts><transactionShares><value>200</value>
+      </transactionShares><transactionPricePerShare><value>50</value></transactionPricePerShare>
+      <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode></transactionAmounts>
+      </nonDerivativeTransaction><nonDerivativeTransaction><transactionCoding><transactionCode>S</transactionCode>
+      </transactionCoding></nonDerivativeTransaction></nonDerivativeTable></ownershipDocument>"""
+    rows = p1.insider_purchases_from_form4(xml, "AAPL", "2026-09-01", "A9")
+    assert rows == [{"asset": "AAPL", "filing_date": pd.Timestamp("2026-09-01"), "owner": "Doe Jane",
+                     "role": "administrateur", "value": 10000.0, "accession": "A9"}]
+    assert p1.insider_purchases_from_form4(xml, "AAPL", "2026-09-01", "A9", issuer_cik=320193) == rows
+    assert p1.insider_purchases_from_form4(xml, "BRK-B", "2026-09-01", "A9", issuer_cik=1067983) == []

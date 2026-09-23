@@ -10,13 +10,13 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 | [`backtest/flow_backtest.py`](backtest/flow_backtest.py) | Moteur de backtest : délais de publication appliqués (13F, COT, flux), sortie à trois niveaux, exécution fractionnée, métriques de risque, Matrice prédictive |
 | [`backtest/smart_money.py`](backtest/smart_money.py) | Liste Smart Money point-in-time (gérants sélectionnés sur leurs 13F passés), indice de détention à composition constante, proxy de flux gratuit à partir des volumes |
 | [`backtest/market_footprint.py`](backtest/market_footprint.py) | Troisième jambe : empreinte des grands acteurs (banques, institutions) dans le prix et le volume — zone de valeur, VWAP, ratio hausses / baisses, jours de distribution |
-| [`backtest/institutional_radar.py`](backtest/institutional_radar.py) | Radar des grands acteurs : volumes anormaux, pression acheteuse ou vendeuse, accumulation discrète et échanges hors bourse, sur l'heure, le jour, la semaine et le mois |
+| [`backtest/institutional_radar.py`](backtest/institutional_radar.py) | Radar des grands acteurs : volumes anormaux, pression acheteuse ou vendeuse, accumulation discrète et échanges hors bourse, sur l'heure, le jour, la semaine et le mois ; plus les indices gratuits complémentaires (divergence volume / prix, jours d'accumulation, force relative, bourses privées et plateformes des banques, positions vendeuses, achats des dirigeants, franchissements de 5 %, filtre des jours de résultats) |
 | [`backtest/trade_cards.py`](backtest/trade_cards.py) · [`backtest/dashboard.py`](backtest/dashboard.py) | Fiches de trade (quoi, pourquoi, historique du signal, aujourd'hui) et page « Desk Smart Money » |
 | [`backtest/phase1_data.py`](backtest/phase1_data.py) | Circuit de données réelles gratuites (SEC 13F, OpenFIGI, secteurs SIC, cours Tiingo, positions des banques CFTC) — marche à suivre : [`docs/PHASE1_DONNEES_REELLES.md`](docs/PHASE1_DONNEES_REELLES.md) |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateurs Pine *Smart Money Flow Monitor* et *Empreinte des grands acteurs*, récepteur des alertes webhook |
 | [`mcp_server/`](mcp_server/) | Serveur MCP du fonds (lecture seule) : interroger le fonds en français depuis un assistant IA |
-| [`tests/`](tests/) | 57 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 68 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
 
 **Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
 gratuites, risque équilibré, TradingView gratuit, suivi des banques par le prix et le volume
@@ -59,6 +59,11 @@ python backtest/flow_backtest.py --data-dir mes_donnees/
 | `assets.csv` | `asset, asset_class (EQUITY / FX / COMMODITY / CRYPTO), flow_vehicle[, tv_symbol]` |
 | `prices.csv` | `date, asset, close[, high, low, volume]` (inclure les titres radiés ; plus haut, plus bas et volume activent l'empreinte et le radar des grands acteurs) |
 | `offexchange.csv` (optionnel) | `date, asset, total_volume, short_volume` : volumes hors bourse (FINRA) |
+| `ats.csv` (optionnel) | `asset, week_start, published, ats_volume, block_volume, bank_volume, banks` : bourses privées (FINRA, hebdomadaire) |
+| `short_interest.csv` (optionnel) | `asset, settlement, available, short_qty` : positions vendeuses déclarées (FINRA) |
+| `insiders.csv` (optionnel) | `asset, filing_date, owner, role, value` : achats des dirigeants sur le marché (Form 4) |
+| `filings_5pct.csv` (optionnel) | `asset, filing_date, form, filer` : franchissements de 5 % (13D / 13G initiaux) |
+| `earnings.csv` (optionnel) | `asset, date` : publications de résultats (jours exclus du radar) |
 | `holdings.csv` | `asset, period_end, filing_date, value` : détention des institutions de référence (13F, COT, on-chain) |
 | `flows.csv` | `date, vehicle, net_flow, aum` : flux nets et encours des véhicules (ETF, EPFR, ETP) |
 
