@@ -1,0 +1,87 @@
+//@version=6
+// =============================================================================
+// Smart Money Flow Monitor — proxy des flux à partir des données NATIVES TradingView
+// =============================================================================
+// Rôle dans le fonds : confirmation visuelle et déclencheur d'alertes pour l'équipe.
+// Ce n'est PAS la source des signaux d'investissement : les décisions reposent sur les
+// données 13F / EPFR / COT / on-chain de l'entrepôt point-in-time (backtest/flow_backtest.py).
+//
+// Mesures (fenêtres en barres, à lire en unité de temps 1D) :
+//   * Chaikin Money Flow (CMF) : pression acheteuse/vendeuse pondérée par le volume ;
+//   * pente de la ligne Accumulation/Distribution vs pente du prix -> divergences ;
+//   * z-score du volume (activité anormale) ;
+//   * M2 US en glissement annuel (contexte de liquidité globale, Analyste Macro).
+// Limites : le volume du FX au comptant est un volume de ticks propre au courtier ;
+// préférer les contrats à terme (ex. CME:6E1!) pour les devises.
+//
+// Alertes : « Créer une alerte » > condition « Smart Money Flow Monitor » >
+// « N'importe quel appel de fonction alert() » ; cocher « URL du webhook » et saisir
+// l'adresse HTTPS du récepteur du fonds (tradingview/webhook_receiver.py).
+// =============================================================================
+indicator("Smart Money Flow Monitor (proxy volume)", shorttitle = "SM Flow", overlay = false)
+
+lenFlow = input.int(30, "Fenêtre CMF (barres)", minval = 5)
+lenDiv = input.int(63, "Fenêtre divergence prix / A-D (barres)", minval = 10)
+lenZ = input.int(252, "Fenêtre z-score du volume (barres)", minval = 50)
+thrAcc = input.float(0.05, "Seuil CMF accumulation", step = 0.01)
+thrDist = input.float(-0.05, "Seuil CMF distribution", step = 0.01)
+secret = input.string("A-REMPLACER", "Secret partagé du webhook (voir webhook_receiver.py)")
+showM2 = input.bool(true, "Afficher M2 US (glissement annuel)")
+
+// --- Chaikin Money Flow
+float vol = nz(volume)
+float barRange = high - low
+float mfm = barRange > 0 ? ((close - low) - (high - close)) / barRange : 0.0
+float cmf = math.sum(mfm * vol, lenFlow) / math.max(math.sum(vol, lenFlow), 1.0)
+
+// --- Divergence prix / ligne Accumulation-Distribution (normalisée par le volume)
+float priceChg = close / close[lenDiv] - 1.0
+float adSlope = ta.change(ta.accdist, lenDiv) / math.max(math.sum(vol, lenDiv), 1.0)
+bool bearDiv = priceChg > 0 and adSlope < 0
+bool bullDiv = priceChg < 0 and adSlope > 0
+
+// --- Activité anormale
+float volZ = (vol - ta.sma(vol, lenZ)) / math.max(ta.stdev(vol, lenZ), 1e-10)
+
+// --- États
+bool accumulation = cmf > thrAcc and adSlope > 0
+bool distribution = cmf < thrDist and adSlope < 0
+bool newAcc = accumulation and not accumulation[1]
+bool newDist = distribution and not distribution[1]
+
+// --- Contexte macro : M2 US, glissement annuel (données mensuelles)
+float m2Yoy = request.security("ECONOMICS:USM2", "1M", close / close[12] - 1.0, ignore_invalid_symbol = true)
+
+// --- Affichage
+plot(cmf, "Chaikin Money Flow", color = cmf >= 0 ? color.teal : color.red, linewidth = 2)
+hline(0, "Zéro", color = color.gray)
+hline(thrAcc, "Seuil accumulation", color = color.new(color.teal, 50), linestyle = hline.style_dashed)
+hline(thrDist, "Seuil distribution", color = color.new(color.red, 50), linestyle = hline.style_dashed)
+bgcolor(accumulation ? color.new(color.teal, 88) : distribution ? color.new(color.red, 88) : na, title = "État")
+plotshape(bearDiv and not bearDiv[1], "Divergence baissière", shape.triangledown, location.top, color.red, size = size.tiny)
+plotshape(bullDiv and not bullDiv[1], "Divergence haussière", shape.triangleup, location.bottom, color.teal, size = size.tiny)
+
+var table tb = table.new(position.top_right, 2, 4, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast
+    table.cell(tb, 0, 0, "CMF " + str.tostring(lenFlow), text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, str.tostring(cmf, "#.###"), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Z-score volume", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, str.tostring(volZ, "#.##"), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "État", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, accumulation ? "Accumulation" : distribution ? "Distribution" : "Neutre", text_color = color.white, text_size = size.small)
+    if showM2
+        table.cell(tb, 0, 3, "M2 US a/a", text_color = color.white, text_size = size.small)
+        table.cell(tb, 1, 3, na(m2Yoy) ? "n.d." : str.tostring(m2Yoy * 100, "#.#") + " %", text_color = color.white, text_size = size.small)
+
+// --- Alertes : message JSON pour le récepteur webhook du fonds
+alertPayload(string signal) =>
+    '{"secret":"' + secret + '","source":"tradingview","signal":"' + signal + '","symbol":"' + syminfo.tickerid +
+         '","timeframe":"' + timeframe.period + '","close":' + str.tostring(close) + ',"cmf":' + str.tostring(cmf, "#.####") +
+         ',"volume_z":' + str.tostring(volZ, "#.##") + ',"bar_time":' + str.tostring(time) + '}'
+
+if newDist
+    alert(alertPayload("DISTRIBUTION_PROXY"), alert.freq_once_per_bar_close)
+if newAcc
+    alert(alertPayload("ACCUMULATION_PROXY"), alert.freq_once_per_bar_close)
+if bearDiv and not bearDiv[1]
+    alert(alertPayload("DIVERGENCE_BAISSIERE"), alert.freq_once_per_bar_close)
