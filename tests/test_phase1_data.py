@@ -401,3 +401,12 @@ def test_alpaca_daily_prices_in_tiingo_format(tmp_path, monkeypatch):
     assert list(df["splitFactor"]) == [1.0, 1.0, 2.0]  # division le 22/09
     factors = p1.split_factors(prices)["AAPL"]
     assert factors.iloc[-1] == 2.0 and factors.iloc[0] == 1.0
+
+
+def test_alpaca_keys_swapped_in_settings_are_reordered(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "s" * 44)
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "PK" + "X" * 24)
+    assert p1.alpaca_credentials() == ("PK" + "X" * 24, "s" * 44)
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "PK" + "Y" * 24)
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "t" * 44)
+    assert p1.alpaca_credentials() == ("PK" + "Y" * 24, "t" * 44)

@@ -1106,9 +1106,19 @@ def stage_insiders(http: Optional[Http] = None, since: str = EVENTS_START) -> No
 # Étape « alpaca » : heure par heure et gros blocs (toutes les bourses, 15 minutes après)
 # =============================================================================
 
-def alpaca_http() -> Http:
+def alpaca_credentials() -> tuple[str, str]:
+    """(identifiant, secret). Un identifiant Alpaca commence par PK (essai) ou AK (réel) et est plus
+    court que le secret : deux clés saisies à l'envers dans les réglages sont remises dans l'ordre."""
     key = os.environ.get("ALPACA_API_KEY_ID", "").strip()
     secret = os.environ.get("ALPACA_API_SECRET_KEY", "").strip()
+    looks_like_id = lambda v: v[:2] in ("PK", "AK") and len(v) <= 32
+    if key and secret and looks_like_id(secret) and not looks_like_id(key):
+        key, secret = secret, key
+    return key, secret
+
+
+def alpaca_http() -> Http:
+    key, secret = alpaca_credentials()
     if not key or not secret:
         sys.exit("ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY absents (variables d'environnement).")
     # Offre gratuite : 200 requêtes par minute.
