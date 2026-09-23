@@ -105,8 +105,24 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
     unpublished = available > cutoff
     h.loc[unpublished, "value"] *= rng.uniform(0.5, 1.5, size=unpublished.sum())
 
+    # Indices du radar : tout ce qui est publié à partir de T est modifié (utilisé au plus tôt en T+1)
+    ex = synthetic.extras
+    ats = ex.ats.copy()
+    late = ats["published"] >= cutoff
+    ats.loc[late, ["ats_volume", "block_volume", "bank_volume"]] *= rng.uniform(0.1, 10.0, size=(late.sum(), 1))
+    short = ex.short_interest.copy()
+    late = short["available"] >= cutoff
+    short.loc[late, "short_qty"] *= rng.uniform(0.1, 10.0, size=late.sum())
+    insiders = ex.insiders.copy()
+    insiders.loc[insiders["filing_date"] >= cutoff, "value"] *= 100.0
+    filings = ex.filings_5pct.copy()
+    filings.loc[filings["filing_date"] >= cutoff, "form"] = "SC 13D"
+    extras = fb.RadarExtras(ats=ats, short_interest=short, insiders=insiders, filings_5pct=filings,
+                            earnings=ex.earnings)  # dates de résultats : annoncées à l'avance
+
     perturbed = fb.MarketData(prices=prices, holdings=h, flows=flows, aum=aum, assets=synthetic.assets,
-                              high=high, low=low, volume=volume, offexchange=offx, offexchange_short=offx_short)
+                              high=high, low=low, volume=volume, offexchange=offx, offexchange_short=offx_short,
+                              extras=extras)
     alt = fb.run_backtest(perturbed, cfg)
     pd.testing.assert_series_equal(base.equity.loc[:cutoff], alt.equity.loc[:cutoff])
     j1 = base.journal[base.journal["date"] <= cutoff].reset_index(drop=True)

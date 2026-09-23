@@ -23,6 +23,13 @@ arrêtée ; `all` les enchaîne) :
             (fichiers FINRA « Reg SHO » quotidiens, depuis août 2018) -> radar des grands acteurs
   cot       positions des banques (« Dealer / Intermediary ») sur les contrats à terme
             E-mini S&P 500 et Nasdaq-100 (CFTC, rapport TFF)
+  ats       bourses privées titre par titre et plateforme par plateforme (FINRA, hebdomadaire,
+            depuis 2022) : blocs institutionnels et plateformes des banques
+  short     positions vendeuses déclarées, deux fois par mois (FINRA, depuis 2019)
+  events    dates de résultats (8-K, rubrique 2.02) et franchissements de 5 % du capital
+            (13D / 13G) avec le nom du déclarant                               [SEC_CONTACT_EMAIL]
+  insiders  achats des dirigeants sur le marché (Form 4, code P) : jeux trimestriels de la SEC,
+            complétés par les Form 4 déposés depuis                          [SEC_CONTACT_EMAIL]
   build     liste Smart Money, indice de détention, proxy de flux -> data/phase1/engine/
   names     noms des gérants de la liste Smart Money (SEC)                   [SEC_CONTACT_EMAIL]
   buyers    qui a acheté ou vendu chaque action, trimestre par trimestre -> fiches de trade
@@ -49,6 +56,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +68,7 @@ import pandas as pd
 
 import flow_backtest as fb
 import smart_money as sm
+from institutional_radar import BANK_VENUES, BLOCK_VENUES
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data" / "phase1"
@@ -72,6 +81,14 @@ TIINGO_PRICES = "https://api.tiingo.com/tiingo/daily/{ticker}/prices"
 CFTC_TFF = "https://publicreporting.cftc.gov/resource/gpe5-46if.json"
 FINRA_DAILY = "https://cdn.finra.org/equity/regsho/daily/CNMSshvol{day:%Y%m%d}.txt"
 FINRA_START = "2018-08-01"  # fichiers consolidés « CNMS » disponibles depuis cette date
+FINRA_API = "https://api.finra.org/data/group/otcMarket/name/{name}"
+ATS_START = "2022-01-03"  # bourses privées titre par titre : historique de l'API FINRA
+SHORT_START = "2019-01-01"
+SHORT_PUBLICATION_DAYS = 11  # positions arrêtées au 15 et en fin de mois, publiées ~7 jours ouvrés après
+SEC_INSIDER_PAGE = "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
+SEC_ARCHIVES = "https://www.sec.gov/Archives/edgar/data/{cik}/{folder}/{document}"
+EVENTS_START = "2019-01-01"
+FIVE_PCT_FORMS = {"SC 13D", "SC 13G", "SCHEDULE 13D", "SCHEDULE 13G"}  # déclarations initiales uniquement
 
 # ETF sectoriels SPDR (jambe rapide) et marché large ; un ETF lancé tardivement est prolongé
 # dans le passé par l'ETF qui couvrait ce secteur avant lui (le Chaikin Money Flow est sans unité).
@@ -577,6 +594,357 @@ def stage_buyers() -> None:
 
 
 # =============================================================================
+# Étapes « ats » et « short » : bourses privées et positions vendeuses (API FINRA)
+# =============================================================================
+
+def finra_http() -> Http:
+    return Http(headers={"User-Agent": "FlowFund-Research/1.0", "Accept": "application/json"}, min_interval=0.5)
+
+
+def finra_query(http: Http, name: str, compare: list[dict], domain: Optional[dict] = None,
+                fields: Optional[list[str]] = None, limit: int = 5000) -> list[dict]:
+    """Toutes les lignes d'une requête FINRA, page par page (5 000 lignes au plus par page)."""
+    rows, offset = [], 0
+    while True:
+        body = {"compareFilters": compare, "limit": limit, "offset": offset}
+        if domain:
+            body["domainFilters"] = [{"fieldName": k, "values": v} for k, v in domain.items()]
+        if fields:
+            body["fields"] = fields
+        raw = http.request(FINRA_API.format(name=name), data=json.dumps(body).encode(),
+                           headers={"Content-Type": "application/json"}, method="POST")
+        page = json.loads(raw) if raw.strip() else []
+        rows += page
+        if len(page) < limit:
+            return rows
+        offset += limit
+
+
+def ats_symbol(asset: str) -> str:
+    """BRK-B (Tiingo) -> BRK.B (FINRA, bourses privées)."""
+    return asset.replace("-", ".")
+
+
+def short_symbol(asset: str) -> str:
+    """BRK-B (Tiingo) -> BRKB (FINRA, positions vendeuses)."""
+    return asset.replace("-", "").replace(".", "")
+
+
+def aggregate_ats(records: list[dict], assets: Iterable[str]) -> pd.DataFrame:
+    """Lignes FINRA (titre x plateforme x semaine) -> une ligne par titre et par semaine : volume des
+    bourses privées, des plateformes de blocs et des plateformes bancaires, banques les plus actives."""
+    cols = ["asset", "week_start", "published", "ats_volume", "block_volume", "bank_volume", "banks"]
+    if not records:
+        return pd.DataFrame(columns=cols)
+    back = {ats_symbol(a): a for a in assets}
+    df = pd.DataFrame(records)
+    df = df.assign(asset=df["issueSymbolIdentifier"].map(back),
+                   qty=pd.to_numeric(df["totalWeeklyShareQuantity"], errors="coerce").fillna(0.0))
+    df = df.dropna(subset=["asset"])
+    df["bank"] = df["MPID"].map(BANK_VENUES)
+    df["is_block"] = df["MPID"].isin(BLOCK_VENUES)
+    out = []
+    for (asset, week), grp in df.groupby(["asset", "weekStartDate"]):
+        banks = grp.dropna(subset=["bank"]).groupby("bank")["qty"].sum().sort_values(ascending=False)
+        out.append({
+            "asset": asset, "week_start": pd.Timestamp(week), "published": pd.Timestamp(grp["initialPublishedDate"].max()),
+            "ats_volume": grp["qty"].sum(), "block_volume": grp.loc[grp["is_block"], "qty"].sum(),
+            "bank_volume": banks.sum(), "banks": ", ".join(banks.index[:3]),
+        })
+    return pd.DataFrame(out, columns=cols)
+
+
+def stage_ats(http: Optional[Http] = None, start: str = ATS_START) -> None:
+    http = http or finra_http()
+    folder = DATA / "ats"
+    folder.mkdir(parents=True, exist_ok=True)
+    assets = sorted(set(cusip_ticker_map().values()))
+    symbols = [ats_symbol(a) for a in assets]
+    today = pd.Timestamp.today().normalize()
+    for week in pd.date_range(start, today - pd.Timedelta(days=14), freq="W-MON"):
+        path = folder / f"{week:%Y-%m-%d}.parquet"
+        if path.exists() and week < today - pd.Timedelta(days=45):
+            continue  # semaine complète (niveaux 1 et 2 publiés) déjà en cache
+        records = []
+        for tier in ("T1", "T2"):
+            records += finra_query(http, "weeklySummary", [
+                {"compareType": "EQUAL", "fieldName": "weekStartDate", "fieldValue": f"{week:%Y-%m-%d}"},
+                {"compareType": "EQUAL", "fieldName": "tierIdentifier", "fieldValue": tier},
+                {"compareType": "EQUAL", "fieldName": "summaryTypeCode", "fieldValue": "ATS_W_SMBL_FIRM"},
+            ], domain={"issueSymbolIdentifier": symbols}, fields=[
+                "issueSymbolIdentifier", "MPID", "totalWeeklyShareQuantity", "weekStartDate", "initialPublishedDate"])
+        if records:
+            aggregate_ats(records, assets).to_parquet(path, index=False)
+            print(f"Bourses privées, semaine du {week:%d/%m/%Y} : {len(records)} lignes")
+
+
+def parse_short_interest(records: list[dict], assets: Iterable[str],
+                         publication_days: int = SHORT_PUBLICATION_DAYS) -> pd.DataFrame:
+    back = {short_symbol(a): a for a in assets}
+    df = pd.DataFrame(records)
+    if df.empty:
+        return pd.DataFrame(columns=["asset", "settlement", "available", "short_qty", "days_to_cover"])
+    out = pd.DataFrame({
+        "asset": df["symbolCode"].map(back),
+        "settlement": pd.to_datetime(df["settlementDate"]).astype("datetime64[ns]"),
+        "short_qty": pd.to_numeric(df["currentShortPositionQuantity"], errors="coerce"),
+        "days_to_cover": pd.to_numeric(df.get("daysToCoverQuantity"), errors="coerce"),
+    }).dropna(subset=["asset", "short_qty"])
+    out["available"] = out["settlement"] + pd.Timedelta(days=publication_days)
+    return (out.drop_duplicates(["asset", "settlement"], keep="last").sort_values(["asset", "settlement"])
+            [["asset", "settlement", "available", "short_qty", "days_to_cover"]].reset_index(drop=True))
+
+
+def stage_short(http: Optional[Http] = None, start: str = SHORT_START) -> None:
+    http = http or finra_http()
+    assets = sorted(set(cusip_ticker_map().values()))
+    records = []
+    for k in range(0, len(assets), 100):
+        chunk = [short_symbol(a) for a in assets[k:k + 100]]
+        records += finra_query(http, "consolidatedShortInterest",
+                               [{"compareType": "GREATER", "fieldName": "settlementDate", "fieldValue": start}],
+                               domain={"symbolCode": chunk},
+                               fields=["symbolCode", "settlementDate", "currentShortPositionQuantity",
+                                       "daysToCoverQuantity"])
+    out = parse_short_interest(records, assets)
+    out.to_csv(DATA / "short_interest.csv", index=False)
+    print(f"Positions vendeuses : {len(out):,} rapports, {out['asset'].nunique()} titres")
+
+
+# =============================================================================
+# Étapes « events » et « insiders » : résultats, seuils de 5 %, achats des dirigeants (SEC)
+# =============================================================================
+
+def submissions_frame(sub: dict) -> pd.DataFrame:
+    """Bloc « recent » (ou fichier d'archive) de data.sec.gov/submissions -> tableau des dépôts."""
+    block = sub.get("filings", {}).get("recent", sub)
+    keys = ["accessionNumber", "filingDate", "form", "items", "primaryDocument", "acceptanceDateTime", "fileNumber"]
+    n = len(block.get("accessionNumber", []))
+    return pd.DataFrame({k: block.get(k, [""] * n) for k in keys})
+
+
+def load_submissions(http: Http, cik: int, since: str = EVENTS_START, max_age_hours: float = 20.0) -> pd.DataFrame:
+    """Tous les dépôts d'un émetteur depuis `since` (bloc récent + archives), en cache pour la journée."""
+    folder = DATA / "submissions"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{cik}.parquet"
+    if path.exists() and time.time() - path.stat().st_mtime < max_age_hours * 3600:
+        cached = pd.read_parquet(path)
+        if "fileNumber" in cached.columns:
+            return cached
+    sub = json.loads(http.get(SEC_SUBMISSIONS.format(cik=cik)))
+    frames = [submissions_frame(sub)]
+    for extra in sub.get("filings", {}).get("files", []):
+        if extra.get("filingTo", "9999") >= since:
+            frames.append(submissions_frame(json.loads(http.get(f"https://data.sec.gov/submissions/{extra['name']}"))))
+    df = pd.concat(frames, ignore_index=True)
+    df = df[df["filingDate"] >= since].drop_duplicates("accessionNumber").reset_index(drop=True)
+    df.to_parquet(path, index=False)
+    return df
+
+
+def earnings_dates(filings: pd.DataFrame) -> list[str]:
+    """Communiqués de résultats : 8-K comportant la rubrique 2.02."""
+    is_8k = filings["form"].isin(["8-K", "8-K/A"])
+    has_202 = filings["items"].fillna("").str.split(",").apply(lambda items: "2.02" in [i.strip() for i in items])
+    return sorted(set(filings.loc[is_8k & has_202, "filingDate"]))
+
+
+def filer_from_headers(text: str, issuer_cik: int) -> str:
+    """Nom du déclarant dans l'en-tête EDGAR d'une 13D / 13G (hors émetteur, qui dépose parfois pour
+    le compte de ses dirigeants)."""
+    for block in re.split(r"FILED BY:", text)[1:]:
+        name = re.search(r"COMPANY CONFORMED NAME:\s*([^\n<]+)", block)
+        cik = re.search(r"CENTRAL INDEX KEY:\s*(\d+)", block)
+        if name and (not cik or int(cik.group(1)) != issuer_cik):
+            return pretty_name(name.group(1).replace("&amp;", "&").strip())
+    return ""
+
+
+def stage_events(http: Optional[Http] = None) -> None:
+    http = http or sec_http()
+    sectors = json.load(open(DATA / "sectors.json"))
+    filers_path = DATA / "filers.json"
+    filers = json.load(open(filers_path)) if filers_path.exists() else {}
+    earnings, five = [], []
+    for asset, info in sorted(sectors.items()):
+        cik = info.get("cik")
+        if not cik:
+            continue
+        try:
+            filings = load_submissions(http, int(cik))
+        except HttpError:
+            continue
+        earnings += [(asset, d) for d in earnings_dates(filings)]
+        # Dans la liste d'un émetteur figurent aussi les 13G qu'IL dépose sur d'autres sociétés (banques,
+        # gérants) : seules les déclarations portant son numéro de dossier « 005- » le concernent.
+        about = filings["form"].isin(FIVE_PCT_FORMS) & filings["fileNumber"].fillna("").str.startswith("005-")
+        for r in filings[about].itertuples():
+            if r.accessionNumber not in filers:
+                url = SEC_ARCHIVES.format(cik=int(cik), folder=r.accessionNumber.replace("-", ""),
+                                          document=f"{r.accessionNumber}-index-headers.html")
+                try:
+                    filers[r.accessionNumber] = filer_from_headers(http.get(url).decode("utf-8", "replace"), int(cik))
+                except HttpError:
+                    filers[r.accessionNumber] = ""
+            five.append((asset, r.filingDate, r.form.replace("SCHEDULE", "SC"), filers[r.accessionNumber]))
+    json.dump(filers, open(filers_path, "w"), indent=0, ensure_ascii=False)
+    pd.DataFrame(earnings, columns=["asset", "date"]).to_csv(DATA / "earnings.csv", index=False)
+    pd.DataFrame(five, columns=["asset", "filing_date", "form", "filer"]).to_csv(DATA / "filings_5pct.csv", index=False)
+    print(f"Événements : {len(earnings):,} publications de résultats, {len(five)} franchissements de 5 %")
+
+
+ROLE_WORDS = {"Director": "administrateur", "Officer": "dirigeant", "TenPercentOwner": "actionnaire de plus de 10 %",
+              "Other": "autre"}
+
+
+def role_text(relationship: str, title: str = "") -> str:
+    parts = [ROLE_WORDS.get(r.strip(), "") for r in str(relationship or "").split(",")]
+    text = ", ".join(p for p in parts if p)
+    title = str(title or "").strip()
+    return f"{text} — {title}" if title and title.lower() != "nan" else text
+
+
+def insider_purchases_from_zip(raw: bytes, cik_to_asset: dict[int, str]) -> pd.DataFrame:
+    """Jeu trimestriel « Insider Transactions » de la SEC -> achats sur le marché (code P) des titres suivis."""
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    read = lambda name, cols: pd.read_csv(z.open(next(n for n in z.namelist() if n.endswith(name))), sep="\t",
+                                          dtype=str, usecols=cols, keep_default_na=False)
+    sub = read("SUBMISSION.tsv", ["ACCESSION_NUMBER", "FILING_DATE", "DOCUMENT_TYPE", "ISSUERCIK"])
+    sub = sub[sub["DOCUMENT_TYPE"].isin(["4", "4/A"])]
+    sub = sub.assign(asset=pd.to_numeric(sub["ISSUERCIK"], errors="coerce").map(cik_to_asset)).dropna(subset=["asset"])
+    trans = read("NONDERIV_TRANS.tsv", ["ACCESSION_NUMBER", "TRANS_CODE", "TRANS_SHARES", "TRANS_PRICEPERSHARE",
+                                        "TRANS_ACQUIRED_DISP_CD"])
+    trans = trans[(trans["TRANS_CODE"] == "P") & (trans["TRANS_ACQUIRED_DISP_CD"] == "A")]
+    owners = read("REPORTINGOWNER.tsv", ["ACCESSION_NUMBER", "RPTOWNERNAME", "RPTOWNER_RELATIONSHIP", "RPTOWNER_TITLE"])
+    owners = owners.drop_duplicates("ACCESSION_NUMBER")
+    df = trans.merge(sub, on="ACCESSION_NUMBER").merge(owners, on="ACCESSION_NUMBER", how="left")
+    value = pd.to_numeric(df["TRANS_SHARES"], errors="coerce") * pd.to_numeric(df["TRANS_PRICEPERSHARE"], errors="coerce")
+    out = pd.DataFrame({
+        "asset": df["asset"], "filing_date": pd.to_datetime(df["FILING_DATE"], format="%d-%b-%Y"),
+        "owner": df["RPTOWNERNAME"].map(pretty_name),
+        "role": [role_text(r, t) for r, t in zip(df["RPTOWNER_RELATIONSHIP"], df["RPTOWNER_TITLE"])],
+        "value": value, "accession": df["ACCESSION_NUMBER"],
+    }).dropna(subset=["value"])
+    return (out.groupby(["asset", "filing_date", "owner", "role", "accession"], as_index=False)["value"].sum()
+            [["asset", "filing_date", "owner", "role", "value", "accession"]])
+
+
+def _xml_text(node, path: str) -> str:
+    found = node.find(path)
+    return (found.text or "").strip() if found is not None and found.text else ""
+
+
+def insider_purchases_from_form4(xml: bytes, asset: str, filing_date: str, accession: str,
+                                 issuer_cik: Optional[int] = None) -> list[dict]:
+    """Form 4 au format XML -> achats sur le marché (code P). Un Form 4 déposé PAR la société sur une
+    autre société (elle-même actionnaire de plus de 10 %) est écarté grâce au code de l'émetteur."""
+    root = ET.fromstring(xml)
+    if issuer_cik is not None:
+        found = _xml_text(root, "issuer/issuerCik")
+        if not found.isdigit() or int(found) != int(issuer_cik):
+            return []
+    owner = root.find("reportingOwner")
+    name = pretty_name(_xml_text(owner, "reportingOwnerId/rptOwnerName")) if owner is not None else ""
+    rel = owner.find("reportingOwnerRelationship") if owner is not None else None
+    flags = []
+    if rel is not None:
+        for tag, word in (("isDirector", "Director"), ("isOfficer", "Officer"), ("isTenPercentOwner", "TenPercentOwner")):
+            if _xml_text(rel, tag).lower() in ("1", "true"):
+                flags.append(word)
+    role = role_text(",".join(flags), _xml_text(rel, "officerTitle") if rel is not None else "")
+    rows = []
+    for t in root.findall("nonDerivativeTable/nonDerivativeTransaction"):
+        if _xml_text(t, "transactionCoding/transactionCode") != "P":
+            continue
+        if _xml_text(t, "transactionAmounts/transactionAcquiredDisposedCode/value") != "A":
+            continue
+        try:
+            value = float(_xml_text(t, "transactionAmounts/transactionShares/value")) * float(
+                _xml_text(t, "transactionAmounts/transactionPricePerShare/value"))
+        except ValueError:
+            continue
+        rows.append({"asset": asset, "filing_date": pd.Timestamp(filing_date), "owner": name, "role": role,
+                     "value": value, "accession": accession})
+    return rows
+
+
+def stage_insiders(http: Optional[Http] = None, since: str = EVENTS_START) -> None:
+    http = http or sec_http()
+    sectors = json.load(open(DATA / "sectors.json"))
+    cik_to_asset = {int(v["cik"]): a for a, v in sectors.items() if v.get("cik")}
+    folder = DATA / "insiders"
+    folder.mkdir(parents=True, exist_ok=True)
+    # 1. Historique : jeux trimestriels (un fichier par trimestre, publié après la fin du trimestre)
+    html = http.get(SEC_INSIDER_PAGE).decode("utf-8", "replace")
+    urls = [urljoin(SEC_INSIDER_PAGE, h) for h in re.findall(r'href="([^"]+_form345\.zip)"', html, flags=re.I)]
+    covered = pd.Timestamp(since) - pd.Timedelta(days=1)
+    for url in sorted(set(urls)):
+        m = re.search(r"(\d{4})q(\d)_form345", url)
+        if not m:
+            continue
+        quarter_end = pd.Period(f"{m.group(1)}Q{m.group(2)}", freq="Q").end_time.normalize()
+        if quarter_end < pd.Timestamp(since):
+            continue
+        path = folder / f"{m.group(1)}q{m.group(2)}.parquet"
+        if not path.exists():
+            insider_purchases_from_zip(http.get(url), cik_to_asset).to_parquet(path, index=False)
+            print(f"Dirigeants {m.group(1)} T{m.group(2)} : jeu trimestriel traité")
+        covered = max(covered, quarter_end)
+    # 2. Depuis le dernier jeu publié : Form 4 déposés, lus un par un (en cache)
+    seen_path = folder / "recent_seen.json"
+    seen = set(json.load(open(seen_path))) if seen_path.exists() else set()
+    recent_path = folder / "recent.parquet"
+    recent = pd.read_parquet(recent_path).to_dict("records") if recent_path.exists() else []
+    for asset, info in sorted(sectors.items()):
+        cik = info.get("cik")
+        if not cik:
+            continue
+        try:
+            filings = load_submissions(http, int(cik))
+        except HttpError:
+            continue
+        new = filings[(filings["form"] == "4") & (pd.to_datetime(filings["filingDate"]) > covered)
+                      & ~filings["accessionNumber"].isin(seen)]
+        for r in new.itertuples():
+            document = re.sub(r"^xslF345X\d+/", "", r.primaryDocument)
+            url = SEC_ARCHIVES.format(cik=int(cik), folder=r.accessionNumber.replace("-", ""), document=document)
+            try:
+                recent += insider_purchases_from_form4(http.get(url), asset, r.filingDate, r.accessionNumber, int(cik))
+            except (HttpError, ET.ParseError) as err:  # document illisible : ignoré, signalé
+                print(f"Form 4 ignoré ({asset}, {r.accessionNumber}) : {str(err)[:80]}")
+            seen.add(r.accessionNumber)
+    json.dump(sorted(seen), open(seen_path, "w"))
+    recent_df = pd.DataFrame(recent, columns=["asset", "filing_date", "owner", "role", "value", "accession"])
+    recent_df = recent_df[pd.to_datetime(recent_df["filing_date"]) > covered]
+    recent_df.to_parquet(recent_path, index=False)
+    history = [pd.read_parquet(f) for f in sorted(folder.glob("*q*.parquet"))]
+    allp = pd.concat(history + [recent_df], ignore_index=True).drop_duplicates(["accession", "owner", "value"])
+    allp.to_csv(DATA / "insiders.csv", index=False)
+    print(f"Achats des dirigeants : {len(allp):,} achats sur le marché, {allp['asset'].nunique()} titres "
+          f"(jeux trimestriels jusqu'au {covered:%d/%m/%Y}, Form 4 lus ensuite)")
+
+
+def copy_radar_extras(stocks: Iterable[str], out_dir: Path) -> list[str]:
+    """Recopie dans le dossier du moteur les indices complémentaires disponibles, titres suivis seulement."""
+    stocks = set(stocks)
+    written = []
+    ats_files = sorted((DATA / "ats").glob("*.parquet")) if (DATA / "ats").exists() else []
+    if ats_files:
+        ats = pd.concat([pd.read_parquet(f) for f in ats_files], ignore_index=True)
+        ats[ats["asset"].isin(stocks)].to_csv(out_dir / "ats.csv", index=False)
+        written.append("ats")
+    for table in ("short_interest", "insiders", "filings_5pct", "earnings"):
+        src = DATA / f"{table}.csv"
+        if src.exists():
+            df = pd.read_csv(src, keep_default_na=False, na_values=[""])
+            df = df[df["asset"].isin(stocks)].drop(columns=["accession"], errors="ignore")
+            df.to_csv(out_dir / f"{table}.csv", index=False)
+            written.append(table)
+    return written
+
+
+# =============================================================================
 # Étape « build » : fichiers du moteur
 # =============================================================================
 
@@ -682,12 +1050,13 @@ def build_engine_files(out_dir: Optional[Path] = None, lookback: int = 8, top_n:
     finra = load_finra()
     if finra is not None:
         finra[finra["asset"].isin(stocks)].to_csv(out_dir / "offexchange.csv", index=False)
+    extras = copy_radar_extras(stocks, out_dir)
 
     summary = {
         "titres": len(stocks), "titres_sans_cours": len(stock_symbols) - len(stocks),
         "gerants_classes": int(returns["cik"].nunique()), "trimestres_de_liste": int(selection["period_end"].nunique()),
         "lignes_holdings": len(holdings), "etf": sorted(vehicles),
-        "hors_bourse": finra is not None,
+        "hors_bourse": finra is not None, "indices_radar": extras,
     }
     json.dump(summary, open(out_dir / "resume.json", "w"), indent=1, ensure_ascii=False)
     return summary
@@ -710,6 +1079,11 @@ def status() -> None:
     n_finra = len(list((DATA / 'finra').glob('*.parquet'))) if (DATA / 'finra').exists() else 0
     print(f"finra     : {n_finra} mois")
     print(f"cot       : {ok(DATA / 'cot_dealers.csv')}")
+    n_ats = len(list((DATA / 'ats').glob('*.parquet'))) if (DATA / 'ats').exists() else 0
+    print(f"ats       : {n_ats} semaine(s)")
+    print(f"short     : {ok(DATA / 'short_interest.csv')}")
+    print(f"events    : {ok(DATA / 'filings_5pct.csv')}")
+    print(f"insiders  : {ok(DATA / 'insiders.csv')}")
     print(f"build     : {ok(DATA / 'engine' / 'resume.json')}")
     print(f"names     : {ok(DATA / 'names.json')}")
     print(f"buyers    : {ok(DATA / 'engine' / 'smart_money_buyers.csv')}")
@@ -720,7 +1094,7 @@ def status() -> None:
 def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Circuit de données réelles de la phase 1")
     parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
-                                          "cot", "build", "names", "buyers"])
+                                          "cot", "ats", "short", "events", "insiders", "build", "names", "buyers"])
     parser.add_argument("--max-symbols", type=int, default=488,
                         help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
@@ -728,6 +1102,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     stages: dict[str, Callable[[], object]] = {
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
         "sectors": stage_sectors, "prices": stage_prices, "finra": stage_finra, "cot": stage_cot,
+        "ats": stage_ats, "short": stage_short, "events": stage_events, "insiders": stage_insiders,
         "build": lambda: print(json.dumps(build_engine_files(), indent=1, ensure_ascii=False)),
         "names": stage_names, "buyers": stage_buyers,
     }

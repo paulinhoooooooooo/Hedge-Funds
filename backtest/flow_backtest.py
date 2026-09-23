@@ -68,7 +68,7 @@ from typing import Iterable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
-from institutional_radar import ALERT_THRESHOLD, Radar, compute_radar
+from institutional_radar import ALERT_THRESHOLD, BANK_VENUES, Radar, RadarExtras, compute_radar
 from market_footprint import Footprint, compute_footprint, describe_footprint
 
 
@@ -200,6 +200,8 @@ class MarketData:
     high, low, volume : DataFrame [date x actif], optionnels — nécessaires à l'empreinte de marché
     offexchange, offexchange_short : DataFrame [date x actif], optionnels — volume échangé hors
                bourse et volume vendu à découvert hors bourse (fichiers FINRA « Reg SHO »)
+    extras   : RadarExtras, optionnel — autres indices gratuits du radar (bourses privées, positions
+               vendeuses déclarées, achats des dirigeants, franchissements de 5 %, dates de résultats)
     """
 
     prices: pd.DataFrame
@@ -212,6 +214,7 @@ class MarketData:
     volume: Optional[pd.DataFrame] = None
     offexchange: Optional[pd.DataFrame] = None
     offexchange_short: Optional[pd.DataFrame] = None
+    extras: Optional[RadarExtras] = None
 
     @property
     def has_ohlcv(self) -> bool:
@@ -399,10 +402,70 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
     short = np.clip(0.46 + 0.04 * reg + 0.05 * rng_v.standard_normal((n_t, n_a)), 0.05, 0.95)
     offexchange = pd.DataFrame(np.where(equity, volume.to_numpy() * share, np.nan), index=cal, columns=names)
     offexchange_short = offexchange * short
+    extras = _synthetic_radar_extras(cal, names, equity, reg, volume, seed)
 
     return MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets,
                       high=high, low=low, volume=volume, offexchange=offexchange,
-                      offexchange_short=offexchange_short)
+                      offexchange_short=offexchange_short, extras=extras)
+
+
+def _synthetic_radar_extras(cal: pd.DatetimeIndex, names: list[str], equity: np.ndarray, reg: np.ndarray,
+                            volume: pd.DataFrame, seed: int) -> RadarExtras:
+    """Indices complémentaires fictifs pour les actions (générateur séparé : cours et volumes inchangés).
+
+    Pendant l'accumulation, les institutions passent davantage par les bourses privées et les
+    plateformes de blocs, les vendeurs à découvert se retirent, les dirigeants et de grands
+    investisseurs achètent plus souvent ; l'inverse en distribution. Chaque donnée porte sa date
+    de publication réelle (FINRA : 3 semaines pour les bourses privées, 11 jours pour les positions
+    vendeuses ; SEC : 2 jours pour les Form 4, 10 jours pour les 13D / 13G)."""
+    rng = np.random.default_rng(seed + 20_000)
+    banks = sorted(set(BANK_VENUES.values()))
+    reg_df = pd.DataFrame(reg, index=cal, columns=names)
+    ats, short_rows, insiders, filings, earnings = [], [], [], [], []
+    weekly_volume = volume.resample("W-MON", label="left", closed="left").sum()
+    settlements = pd.DatetimeIndex(sorted(set(
+        list(pd.date_range(cal[0], cal[-1], freq="SMS") + pd.Timedelta(days=14))
+        + list(pd.date_range(cal[0], cal[-1], freq="ME")))))
+    settlements = cal[np.unique(np.clip(cal.searchsorted(settlements, side="right") - 1, 0, None))]
+    quarter_ends = pd.date_range(cal[0], cal[-1], freq="QE")
+    for j, name in enumerate(names):
+        if not equity[j]:
+            continue
+        # Bourses privées : part du volume, blocs et plateformes bancaires, semaine par semaine
+        r_w = reg_df[name].resample("W-MON", label="left", closed="left").mean()
+        for week, total in weekly_volume[name].items():
+            r = r_w.get(week, 0.0)
+            ats_vol = total * np.clip(0.12 + 0.04 * r + 0.015 * rng.standard_normal(), 0.02, 0.5)
+            block = ats_vol * np.clip(0.03 + 0.03 * max(r, 0) + 0.01 * rng.standard_normal(), 0.002, 0.3)
+            bank = ats_vol * np.clip(0.35 + 0.10 * abs(r) + 0.05 * rng.standard_normal(), 0.05, 0.9)
+            ats.append((name, week, week + pd.Timedelta(days=21), ats_vol, block, bank,
+                        ", ".join(rng.choice(banks, size=2, replace=False))))
+        # Positions vendeuses déclarées : baissent en accumulation, montent en distribution
+        level = 5e6 * np.exp(0.3 * rng.standard_normal())
+        for day in settlements:
+            level *= math.exp(-0.06 * reg_df.at[day, name] + 0.07 * rng.standard_normal())
+            short_rows.append((name, day, day + pd.Timedelta(days=11), level))
+        # Achats des dirigeants (Form 4) et franchissements de 5 % (13D / 13G)
+        buy_prob = np.where(reg[:, j] > 0, 0.004, np.where(reg[:, j] < 0, 0.0005, 0.0012))
+        for t in np.nonzero(rng.random(len(cal)) < buy_prob)[0]:
+            k = int(rng.integers(1, 7))
+            insiders.append((name, cal[t] + pd.Timedelta(days=2), f"Dirigeant fictif {k}",
+                             "administrateur" if k > 4 else "directeur", float(np.exp(rng.normal(12.8, 1.0)))))
+        cross_prob = np.where(reg[:, j] > 0, 0.0012, 0.0002)
+        for t in np.nonzero(rng.random(len(cal)) < cross_prob)[0]:
+            form = "SC 13D" if rng.random() < 0.25 else "SC 13G"
+            filings.append((name, cal[t] + pd.Timedelta(days=10), form, f"Fonds fictif {int(rng.integers(1, 20))}"))
+        # Résultats trimestriels : 3 à 5 semaines après la fin du trimestre
+        for q in quarter_ends:
+            earnings.append((name, q + pd.Timedelta(days=int(rng.integers(21, 36)))))
+    return RadarExtras(
+        ats=pd.DataFrame(ats, columns=["asset", "week_start", "published", "ats_volume", "block_volume",
+                                       "bank_volume", "banks"]),
+        short_interest=pd.DataFrame(short_rows, columns=["asset", "settlement", "available", "short_qty"]),
+        insiders=pd.DataFrame(insiders, columns=["asset", "filing_date", "owner", "role", "value"]),
+        filings_5pct=pd.DataFrame(filings, columns=["asset", "filing_date", "form", "filer"]),
+        earnings=pd.DataFrame(earnings, columns=["asset", "date"]),
+    )
 
 
 def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
@@ -422,6 +485,11 @@ def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
         sx = data.offexchange_short.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset",
                                                                             value_name="short_volume")
         ox.merge(sx, on=["date", "asset"]).dropna(subset=["total_volume"]).to_csv(out / "offexchange.csv", index=False)
+    if data.extras is not None:
+        for table in RadarExtras.TABLES:
+            frame = getattr(data.extras, table)
+            if frame is not None:
+                frame.to_csv(out / f"{table}.csv", index=False)
     fl = data.flows.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="net_flow")
     au = data.aum.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="aum")
     fl.merge(au, on=["date", "vehicle"]).dropna(subset=["net_flow"]).to_csv(out / "flows.csv", index=False)
@@ -440,6 +508,8 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
                    - FX / MP   : positions longues des Asset Managers / Managed Money (COT) ;
                    - crypto    : offre des Long-Term Holders ou solde des wallets institutionnels.
     offexchange.csv (optionnel) : date, asset, total_volume, short_volume (FINRA « Reg SHO »)
+    ats.csv, short_interest.csv, insiders.csv, filings_5pct.csv, earnings.csv (optionnels) :
+                   indices complémentaires du radar (colonnes : voir institutional_radar.RadarExtras)
     flows.csv    : date, vehicle, net_flow, aum
                    - ETF : net_flow = variation des parts en circulation x VL ; aum = encours ;
                    - EPFR : flux nets et encours des fonds du segment ;
@@ -467,7 +537,16 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
         ox["date"] = _as_ns(ox["date"])
         offx = {"offexchange": ox.pivot_table(index="date", columns="asset", values="total_volume", aggfunc="sum"),
                 "offexchange_short": ox.pivot_table(index="date", columns="asset", values="short_volume", aggfunc="sum")}
-    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv, **offx)
+    tables = {}
+    for table in RadarExtras.TABLES:
+        if (d / f"{table}.csv").exists():
+            frame = pd.read_csv(d / f"{table}.csv", keep_default_na=False, na_values=[""])
+            for col in RadarExtras.DATE_COLUMNS[table]:
+                frame[col] = _as_ns(frame[col])
+            tables[table] = frame
+    extras = RadarExtras(**tables) if tables else None
+    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv, **offx,
+                      extras=extras)
     data.validate()
     return data
 
@@ -761,7 +840,12 @@ def compute_signals(data: MarketData, cfg: StrategyConfig) -> Signals:
     if cfg.use_radar and data.has_ohlcv:
         offx = aligned(data.offexchange) if data.offexchange is not None else None
         offx_short = aligned(data.offexchange_short) if data.offexchange_short is not None else None
-        radar = compute_radar(aligned(data.high), aligned(data.low), raw, aligned(data.volume), offx, offx_short)
+        extras = replace(data.extras) if data.extras is not None else RadarExtras()
+        vehicle = data.assets["flow_vehicle"]
+        sizes = vehicle.map(vehicle.value_counts())
+        extras.groups = vehicle.where(sizes >= 3, data.assets["asset_class"]).to_dict()  # secteur, sinon classe
+        radar = compute_radar(aligned(data.high), aligned(data.low), raw, aligned(data.volume), offx, offx_short,
+                              extras=extras)
         entry = entry & ~(radar.score <= -ALERT_THRESHOLD)
         score = score + 0.01 * radar.score
 
