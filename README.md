@@ -16,7 +16,7 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateurs Pine *Smart Money Flow Monitor* et *Empreinte des grands acteurs*, récepteur des alertes webhook |
 | [`mcp_server/`](mcp_server/) | Serveur MCP du fonds (lecture seule) : interroger le fonds en français depuis un assistant IA |
-| [`tests/`](tests/) | 73 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 76 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
 
 **Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
 gratuites, risque équilibré, TradingView gratuit, suivi des banques par le prix et le volume
