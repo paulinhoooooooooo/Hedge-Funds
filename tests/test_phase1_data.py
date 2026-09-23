@@ -113,18 +113,57 @@ def test_process_zip_applies_point_in_time_rules(tmp_path):
 
 def test_universe_ranks_by_dollar_value_and_respects_symbol_budget():
     rows = pd.DataFrame({
-        "cik": ["1", "1", "1", "2"], "cusip": ["A", "B", "C", "C"],
+        "cik": ["1", "1", "1", "2"], "cusip": ["AAAAAA101", "BBBBBB102", "CCCCCC103", "CCCCCC103"],
         "period_end": pd.to_datetime(["2022-09-30"] * 3 + ["2022-12-31"]),
         "filing_date": pd.to_datetime(["2022-11-10"] * 3 + ["2023-02-10"]),
         "accession": ["X", "X", "X", "Y"], "value": [30.0, 20.0, 10.0, 5000.0], "name": ["a", "b", "c", "c"],
     })
     stats = rows.groupby(["cik", "period_end", "accession", "filing_date"], as_index=False).size()
-    ranked, n_keep = p1.build_universe(rows, stats, max_symbols=2, store_top=10)
+    ranked, n_keep = p1.build_universe(rows, stats, max_symbols=2, store_top=10, min_filers=1)
     first = ranked[ranked["period_end"] == "2022-09-30"].sort_values("rank")
-    assert list(first["cusip"]) == ["A", "B", "C"]
+    assert list(first["cusip"]) == ["AAAAAA101", "BBBBBB102", "CCCCCC103"]
     assert first["value_usd"].iloc[0] == 30_000.0  # milliers de dollars avant 2023
     assert ranked[ranked["period_end"] == "2022-12-31"]["value_usd"].iloc[0] == 5000.0
     assert n_keep == 1  # 2 premiers par trimestre -> A, B, C : dépasse le budget de 2 symboles
+
+
+def test_universe_drops_bonds_and_funds_and_resists_unit_errors():
+    # Trimestre 2020 : VALUE en milliers. Le gérant 3 déclare par erreur en dollars (x 1000).
+    rows = pd.DataFrame({
+        "cik": ["1", "2", "3", "1", "2"],
+        "cusip": ["AAAAAA101", "AAAAAA101", "AAAAAA101", "BBBBBBAB1", "78462F103"],
+        "period_end": pd.to_datetime(["2020-03-31"] * 5), "filing_date": pd.to_datetime(["2020-05-10"] * 5),
+        "accession": ["X1", "X2", "X3", "X1", "X2"],
+        "shares": [100, 100, 100, 10_000, 1_000],
+        "value": [10.0, 10.0, 10_000.0, 999_999.0, 300.0],  # 100 actions à 100 $ = 10 milliers
+        "name": ["ALPHA INC", "ALPHA INC", "ALPHA INC", "ALPHA INC NOTE 1% 2025", "SPDR S&P 500 ETF TR"],
+    })
+    stats = rows.groupby(["cik", "period_end", "accession", "filing_date"], as_index=False).size()
+    ranked, _ = p1.build_universe(rows, stats, max_symbols=10, min_filers=1)
+    assert p1.build_universe(rows, stats, max_symbols=10, min_filers=4)[0].empty
+    assert list(ranked["cusip"]) == ["AAAAAA101"]  # obligation (numéro d'émission AB) et ETF exclus
+    assert ranked["value_usd"].iloc[0] == 30_000.0  # 300 actions x prix médian 100 $
+
+
+def test_issuer_name_fallback_when_openfigi_has_no_us_listing():
+    http = FakeHttp({"openfigi": lambda payload: [
+        {"data": [{"ticker": "XOM", "exchCode": "OU"}]},  # cotation étrangère seulement
+        {"data": [{"ticker": "CELG", "exchCode": "SE"}, {"ticker": "CELG", "exchCode": "UW"}]},
+        {"warning": "No identifier found."}]})
+    cache = p1.map_cusips(["30231G102", "151020104", "999999109"], http, {},
+                          names={"30231G102": "EXXON MOBIL CORP", "999999109": "GONE CORP"},
+                          sec_listing={"EXXONMOBIL": "XOM"})
+    assert cache["30231G102"]["ticker"] == "XOM" and cache["30231G102"]["source"] == "sec-name"
+    assert cache["151020104"]["ticker"] == "CELG"  # Nasdaq (UW) accepté sans composite
+    assert cache["999999109"] is None
+    # Second code d'un émetteur déjà résolu (action de préférence) : pas de rapprochement par nom
+    http = FakeHttp({"openfigi": lambda payload: [{"warning": "No identifier found."}] * len(payload)})
+    cache = p1.map_cusips(["060505682"], http, {"060505104": {"ticker": "BAC"}},
+                          names={"060505682": "BK OF AMERICA CORP"}, sec_listing={"BANKOFAMERICA": "BAC"})
+    assert cache["060505682"] is None
+    assert p1.normalize_issuer("Exxon Mobil Corp.") == p1.normalize_issuer("EXXONMOBIL CORP") == "EXXONMOBIL"
+    assert p1.normalize_issuer("HONEYWELL INTL INC") == p1.normalize_issuer("Honeywell International Inc")
+    assert p1.normalize_issuer("ACCENTURE PLC IRELAND") == p1.normalize_issuer("Accenture plc")
 
 
 def test_openfigi_mapping_keeps_us_listing_and_caches():

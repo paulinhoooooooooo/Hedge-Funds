@@ -58,13 +58,14 @@ import os
 import re
 import sys
 import time
+import http.client
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Mapping, Optional
 from urllib.parse import urlencode, urljoin
 
 import numpy as np
@@ -149,6 +150,34 @@ def value_in_dollars(value: pd.Series, filing_date: pd.Series) -> pd.Series:
     return value.where(filing_date >= VALUE_IN_DOLLARS_FROM, value * 1000.0)
 
 
+# Fonds indiciels cotés : ils ne sont pas des « actions » de l'univers (les ETF sectoriels
+# servent déjà de jambe rapide) et ne doivent pas consommer le quota de symboles.
+FUND_NAME = re.compile(r"\bETF\b|SPDR|ISHARES|POWERSHARES|VANGUARD .*(?:INDEX|FD|FUND|ETF)|SELECT SECTOR|QQQ|INDEX FD",
+                       re.I)
+
+
+def is_equity_line(cusip: pd.Series, name: pd.Series) -> pd.Series:
+    """Actions ordinaires seulement. Les positions 7 et 8 d'un CUSIP (numéro d'émission) sont
+    numériques pour une action et alphabétiques pour une dette : des obligations convertibles
+    déclarées par erreur en « SH » sont ainsi écartées, comme les fonds indiciels cotés."""
+    issue = cusip.str[6:8]
+    return issue.str.fullmatch(r"\d\d").fillna(False) & ~name.fillna("").str.contains(FUND_NAME)
+
+
+ISSUER_NOISE = {"INC", "CORP", "CORPORATION", "CO", "COMPANY", "PLC", "LTD", "LIMITED", "HOLDING", "HOLDINGS",
+                "HLDG", "HLDGS", "HLDNGS", "GROUP", "GRP", "NV", "N", "V", "SA", "S", "A", "AG", "SE", "LP", "THE",
+                "NEW", "DEL", "DE", "CL", "CLASS", "COM", "IRELAND", "BERMUDA", "NETHERLANDS", "MASS", "PL"}
+ISSUER_ABBREV = {"INTL": "INTERNATIONAL", "TECH": "TECHNOLOGY", "TECHNOLOGIES": "TECHNOLOGY", "BK": "BANK",
+                 "SYS": "SYSTEMS", "PHARMA": "PHARMACEUTICALS", "COMMUNICATIONS": "COMMUNICATION"}
+
+
+def normalize_issuer(name: str) -> str:
+    """« Exxon Mobil Corp. » -> « EXXONMOBIL » : clé de rapprochement par nom avec la liste de la
+    SEC (abréviations développées, formes juridiques et pays retirés, espaces supprimés)."""
+    words = re.sub(r"[^A-Z0-9 ]", " ", str(name).upper().replace("&", " AND ")).split()
+    return "".join(ISSUER_ABBREV.get(w, w) for w in words if w not in ISSUER_NOISE)
+
+
 def tiingo_symbol(ticker: str) -> str:
     """BRK/B (OpenFIGI) -> BRK-B (Tiingo)."""
     return ticker.strip().upper().replace("/", "-").replace(".", "-")
@@ -190,7 +219,8 @@ class Http:
                     time.sleep(min(600, 30 * 2 ** attempt))
                     continue
                 raise HttpError(err.code, url, body) from None
-            except urllib.error.URLError:
+            except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError):
+                # Coupure réseau, y compris une réponse tronquée (IncompleteRead) : on recommence.
                 if attempt < self.retries:
                     time.sleep(10 * 2 ** attempt)
                     continue
@@ -298,24 +328,55 @@ def first_filing_per_manager(stats: pd.DataFrame) -> pd.DataFrame:
 # Étape « universe » : plus grosses lignes 13F de chaque trimestre
 # =============================================================================
 
-def build_universe(rows: pd.DataFrame, stats: pd.DataFrame, max_symbols: int = 488,
-                   store_top: int = 1000) -> tuple[pd.DataFrame, int]:
+def build_universe(rows: "pd.DataFrame | Iterable[pd.DataFrame]", stats: pd.DataFrame, max_symbols: int = 488,
+                   store_top: int = 1000, min_filers: int = 20) -> tuple[pd.DataFrame, int]:
     """Classe les titres de chaque trimestre par valeur totale déclarée.
 
     Retourne (classement des `store_top` premiers titres de chaque trimestre, N retenu) où N est
     le plus grand nombre de titres par trimestre tel que l'union sur toute la période tienne dans
     `max_symbols` (limite gratuite de Tiingo, ETF déduits). Le classement d'un trimestre n'utilise
     que les déclarations de ce trimestre : pas de biais du survivant.
+
+    `rows` peut être une suite de tables (une par archive SEC) : chacune est agrégée à part, ce
+    qui évite de charger en mémoire les dizaines de millions de lignes de toute la période.
+    Une déclaration (accession) n'apparaît que dans une archive : les sommes et les nombres de
+    gérants distincts s'additionnent donc d'une archive à l'autre.
     """
     firsts = first_filing_per_manager(stats)[["cik", "period_end", "accession"]]
-    rows = rows.merge(firsts, on=["cik", "period_end", "accession"])
-    rows = rows.assign(value_usd=value_in_dollars(rows["value"], rows["filing_date"]))
-    agg = (rows.groupby(["period_end", "cusip"], as_index=False)
-           .agg(value_usd=("value_usd", "sum"), n_filers=("cik", "nunique"), name=("name", "first")))
+    chunks = [rows] if isinstance(rows, pd.DataFrame) else rows
+    parts = []
+    for chunk in chunks:
+        chunk = chunk[is_equity_line(chunk["cusip"], chunk["name"])]
+        chunk = chunk.merge(firsts, on=["cik", "period_end", "accession"])
+        chunk = chunk.assign(value_usd=value_in_dollars(chunk["value"], chunk["filing_date"]))
+        if "shares" in chunk.columns:
+            chunk = chunk.assign(price=chunk["value_usd"] / chunk["shares"].where(chunk["shares"] > 0))
+        else:
+            chunk = chunk.assign(price=np.nan, shares=np.nan)
+        parts.append(chunk.groupby(["period_end", "cusip"], as_index=False)
+                     .agg(value_usd=("value_usd", "sum"), shares=("shares", "sum"), price=("price", "median"),
+                          n_filers=("cik", "nunique"), name=("name", "first")))
+    parts = pd.concat(parts, ignore_index=True)
+    # Prix médian de l'archive qui compte le plus de déclarants (en pratique : celle du trimestre)
+    best = parts.sort_values("n_filers").drop_duplicates(["period_end", "cusip"], keep="last")
+    agg = (parts.groupby(["period_end", "cusip"], as_index=False)
+           .agg(value_usd=("value_usd", "sum"), shares=("shares", "sum"), n_filers=("n_filers", "sum"),
+                name=("name", "first"))
+           .merge(best[["period_end", "cusip", "price"]], on=["period_end", "cusip"]))
+    # Valeur robuste : actions détenues x prix médian déclaré. Des gérants déclarent parfois en
+    # dollars une valeur attendue en milliers (x 1000) : une seule erreur suffisait à placer une
+    # obligation convertible ou Apple (5 600 milliards en 2014) en tête du classement.
+    robust = agg["shares"] * agg["price"]
+    agg["value_usd"] = robust.where(robust.notna(), agg["value_usd"])
+    agg = agg.drop(columns=["shares", "price"])
+    # Une grande capitalisation est détenue par des centaines de gérants : un titre déclaré par
+    # une poignée d'entre eux (code fictif 999999999, action de préférence non cotée, erreur de
+    # saisie) ne peut pas figurer parmi les premiers.
+    agg = agg[agg["n_filers"] >= min_filers].copy()
     agg["rank"] = agg.groupby("period_end")["value_usd"].rank(ascending=False, method="first").astype(int)
     ranked = agg[agg["rank"] <= store_top].sort_values(["period_end", "rank"])
     n_keep = 1
-    for n in range(1, int(ranked["rank"].max()) + 1):
+    for n in range(1, int(ranked["rank"].max() if len(ranked) else 0) + 1):
         if ranked.loc[ranked["rank"] <= n, "cusip"].nunique() > max_symbols:
             break
         n_keep = n
@@ -324,9 +385,10 @@ def build_universe(rows: pd.DataFrame, stats: pd.DataFrame, max_symbols: int = 4
 
 def stage_universe(max_symbols: int = 488) -> None:
     stats = pd.concat([pd.read_parquet(p) for p in _intermediates("managers")], ignore_index=True)
-    frames = [pd.read_parquet(p, columns=["cik", "cusip", "period_end", "filing_date", "accession", "value", "name"])
-              for p in _intermediates("rows")]
-    ranked, n_keep = build_universe(pd.concat(frames, ignore_index=True), stats, max_symbols)
+    frames = (pd.read_parquet(p, columns=["cik", "cusip", "period_end", "filing_date", "accession", "shares", "value",
+                                          "name"])
+              for p in _intermediates("rows"))
+    ranked, n_keep = build_universe(frames, stats, max_symbols)
     ranked.to_parquet(DATA / "universe_ranked.parquet", index=False)
     first_filing_per_manager(stats).to_parquet(DATA / "managers.parquet", index=False)
     json.dump({"top_per_quarter": n_keep}, open(DATA / "universe.json", "w"))
@@ -342,17 +404,57 @@ def universe_cusips(ranked: pd.DataFrame, n_keep: int) -> list[str]:
 # Étape « figi » : CUSIP -> symbole boursier
 # =============================================================================
 
-def map_cusips(cusips: Iterable[str], http: Http, cache: dict) -> dict:
-    """OpenFIGI : 10 identifiants par requête, 25 requêtes par minute sans clé."""
-    todo = [c for c in cusips if c not in cache]
+# Codes d'Exchange Bloomberg des places américaines : composite « US » d'abord, puis NYSE,
+# Nasdaq, NYSE American, Arca… (sans clé, OpenFIGI omet parfois le composite).
+US_EXCH_CODES = ["US", "UN", "UW", "UQ", "UR", "UA", "UP", "UF", "UD", "UT", "UV"]
+
+
+def pick_us_listing(hits: list[dict]) -> Optional[dict]:
+    rank = {code: k for k, code in enumerate(US_EXCH_CODES)}
+    us = sorted((h for h in hits if h.get("exchCode") in rank), key=lambda h: rank[h["exchCode"]])
+    return us[0] if us else None
+
+
+def map_cusips(cusips: Iterable[str], http: Http, cache: dict,
+               names: Optional[Mapping[str, str]] = None, sec_listing: Optional[Mapping[str, str]] = None) -> dict:
+    """OpenFIGI : 10 identifiants par requête, 25 requêtes par minute sans clé.
+
+    Sans cotation américaine chez OpenFIGI, le titre est rapproché par nom d'émetteur de la liste
+    des sociétés cotées publiée par la SEC (`sec_listing` : nom normalisé -> symbole), source
+    « sec-name ». Seuls les titres encore cotés sont retrouvés ainsi : les radiés restent exclus.
+    Un code déjà résolu n'est pas redemandé ; un code non résolu l'est à chaque passage.
+    Les codes résolus par OpenFIGI passent avant ceux résolus par le nom.
+    """
+    todo = [c for c in cusips if cache.get(c) is None]
     for start in range(0, len(todo), 10):
         batch = todo[start:start + 10]
         answer = http.post_json(OPENFIGI_URL, [{"idType": "ID_CUSIP", "idValue": c} for c in batch])
         for cusip, res in zip(batch, answer):
-            hits = [h for h in res.get("data", []) if h.get("exchCode") == "US"]
-            cache[cusip] = ({"ticker": hits[0]["ticker"], "name": hits[0].get("name", ""),
-                             "type": hits[0].get("securityType", "")} if hits else None)
+            hit = pick_us_listing(res.get("data", []))
+            cache[cusip] = ({"ticker": hit["ticker"], "name": hit.get("name", ""),
+                             "type": hit.get("securityType", ""), "source": "openfigi"} if hit else None)
+    # Un symbole déjà attribué à un autre CUSIP n'est pas réutilisé : le second code d'un même
+    # émetteur est souvent une action de préférence (Bank of America série L…), pas l'ordinaire.
+    taken = {v["ticker"] for v in cache.values() if v}
+    for cusip in todo:
+        if cache.get(cusip) is None and names and sec_listing:
+            ticker = sec_listing.get(normalize_issuer(names.get(cusip, "")))
+            if ticker and ticker not in taken:
+                taken.add(ticker)
+                cache[cusip] = {"ticker": ticker, "name": names[cusip], "type": "", "source": "sec-name"}
     return cache
+
+
+def sec_name_listing(http: Http) -> dict[str, str]:
+    """Liste des sociétés cotées de la SEC : nom normalisé -> symbole (noms ambigus écartés)."""
+    listing = json.loads(http.get(SEC_TICKERS)).values()
+    out: dict[str, Optional[str]] = {}
+    for v in listing:
+        key = normalize_issuer(v["title"])
+        if key:
+            # Plusieurs classes d'actions (GOOG/GOOGL) : la première citée par la SEC, la plus liquide.
+            out.setdefault(key, v["ticker"])
+    return {k: t for k, t in out.items() if t}
 
 
 def stage_figi(http: Optional[Http] = None) -> None:
@@ -361,14 +463,28 @@ def stage_figi(http: Optional[Http] = None) -> None:
     n_keep = json.load(open(DATA / "universe.json"))["top_per_quarter"]
     path = DATA / "figi.json"
     cache = json.load(open(path)) if path.exists() else {}
-    map_cusips(universe_cusips(ranked, n_keep), http, cache)
+    cusips = universe_cusips(ranked, n_keep)
+    names = ranked.sort_values("period_end").drop_duplicates("cusip", keep="last").set_index("cusip")["name"]
+    try:
+        listing = sec_name_listing(sec_http())
+    except (HttpError, OSError, SystemExit):
+        listing = {}
+    map_cusips(cusips, http, cache, names.to_dict(), listing)
     json.dump(cache, open(path, "w"), indent=1)
-    found = sum(v is not None for v in cache.values())
-    print(f"OpenFIGI : {found}/{len(cache)} codes CUSIP reconnus (les autres, souvent radiés, sont exclus)")
+    found = [c for c in cusips if cache.get(c)]
+    by_name = sum(cache[c].get("source") == "sec-name" for c in found)
+    print(f"OpenFIGI : {len(found)}/{len(cusips)} codes CUSIP reconnus, dont {by_name} par le nom d'émetteur "
+          f"(les autres, souvent radiés, sont exclus)")
 
 
 def cusip_ticker_map() -> dict[str, str]:
+    """CUSIP -> symbole, limité à l'univers courant : le cache OpenFIGI garde aussi les codes
+    d'univers précédents, qui ne doivent consommer ni le quota Tiingo ni du temps de calcul."""
     cache = json.load(open(DATA / "figi.json"))
+    if (DATA / "universe.json").exists() and (DATA / "universe_ranked.parquet").exists():
+        ranked = pd.read_parquet(DATA / "universe_ranked.parquet", columns=["cusip", "rank"])
+        keep = set(universe_cusips(ranked, json.load(open(DATA / "universe.json"))["top_per_quarter"]))
+        cache = {c: v for c, v in cache.items() if c in keep}
     return {c: tiingo_symbol(v["ticker"]) for c, v in cache.items() if v}
 
 
@@ -1127,6 +1243,7 @@ def adjust_shares_for_splits(positions: pd.DataFrame, factors: dict[str, pd.Seri
     """Exprime les actions déclarées en unités d'avant division : une division 2 pour 1 entre deux
     déclarations ne doit pas passer pour un doublement des achats."""
     adj = positions.copy()
+    adj["shares"] = adj["shares"].astype(float)  # une division donne des fractions d'action
     for asset, grp in adj.groupby("asset"):
         f = factors.get(asset)
         if f is None or f.empty:

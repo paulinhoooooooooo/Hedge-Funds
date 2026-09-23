@@ -267,8 +267,15 @@ SCRIPT = """
 
 
 def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], cot: Optional[pd.DataFrame],
-                     synthetic: bool, label: str) -> str:
+                     synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
+                     benchmark_label: str = "univers équipondéré") -> str:
+    """`benchmark` : indice de comparaison (S&P 500 via SPY sur données réelles) ; à défaut,
+    l'univers équipondéré du moteur, qui hérite du biais du survivant de l'univers."""
     m, b = result.metrics, result.benchmark_metrics
+    bench = result.benchmark
+    if benchmark is not None:
+        bench = benchmark.reindex(result.equity.index).ffill().dropna()
+        b = fb.compute_metrics(bench, fb.StrategyConfig().risk_free_rate)
     asof = result.equity.index[-1]
     n_lines = int((result.scales.iloc[-1] > 0).sum())
     source = ('<span class="source">Données simulées — démonstration</span>' if synthetic
@@ -295,8 +302,8 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
   <section class="kpis" aria-label="État du fonds">{kpi_html}</section>
   <section class="panel chart" aria-label="Courbe du fonds">
     <h2>Le fonds face au marché</h2>
-    {_chart_svg(result.equity, result.benchmark)}
-    <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché (univers équipondéré)</span></div>
+    {_chart_svg(result.equity, bench)}
+    <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché ({esc(benchmark_label)})</span></div>
   </section>
   <div class="main">
     <section class="panel" aria-label="Dernières décisions">
@@ -366,7 +373,14 @@ def main(argv: Optional[list[str]] = None) -> Path:
                                  synthetic=synthetic)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_dashboard(result, review, cards, cot, synthetic, label), encoding="utf-8")
+    spy_path = phase1 / "prices" / "SPY.csv"
+    benchmark, bench_label = None, "univers équipondéré"
+    if not synthetic and spy_path.exists():
+        spy = pd.read_csv(spy_path, parse_dates=["date"]).set_index("date")["adjClose"]
+        spy.index = pd.DatetimeIndex(spy.index).tz_localize(None) if spy.index.tz is not None else spy.index
+        benchmark, bench_label = spy, "S&P 500 · SPY"
+    out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label),
+                   encoding="utf-8")
     print(f"Page écrite : {out}")
     return out
 
