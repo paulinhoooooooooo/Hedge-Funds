@@ -43,6 +43,7 @@ import os
 import re
 import sys
 import time
+import http.client
 import urllib.error
 import urllib.request
 import zipfile
@@ -158,7 +159,8 @@ class Http:
                     time.sleep(min(600, 30 * 2 ** attempt))
                     continue
                 raise HttpError(err.code, url, body) from None
-            except urllib.error.URLError:
+            except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError):
+                # Coupure réseau, y compris une réponse tronquée (IncompleteRead) : on recommence.
                 if attempt < self.retries:
                     time.sleep(10 * 2 ** attempt)
                     continue
