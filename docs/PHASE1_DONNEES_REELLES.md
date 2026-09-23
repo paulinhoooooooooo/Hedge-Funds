@@ -60,9 +60,9 @@ sectoriels, §9.2 de la synthèse). Le serveur MCP du fonds peut ensuite répond
 python backtest/dashboard.py --data-dir data/phase1/engine --out outputs/desk_smart_money.html
 ```
 
-Publier ce fichier comme page web privée (outil Artifact) et donner le lien aux fondateurs. Une
-version de démonstration sur données simulées existe déjà : la **remplacer au même lien** si
-elle est fournie dans la conversation (sinon publier une nouvelle page et donner le lien).
+Publier ce fichier comme page web privée (outil Artifact) en **remplaçant la démonstration au
+même lien** : `https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9` (paramètre `url`), puis donner
+le lien aux fondateurs.
 Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de vendeurs parmi les
 50 meilleurs gérants, les noms des principaux acheteurs, le radar et la position des banques.
 
