@@ -21,7 +21,7 @@ def engine_dir(tmp_path_factory, market):
     cal = market.prices.index
     vix = pd.Series(15.0, index=cal)
     vix.loc["2018-02-01":"2018-03-31"] = 35.0
-    macro = pd.DataFrame({"series": "VIXCLS", "date": cal, "available": cal + pd.Timedelta(days=1), "value": vix.values})
+    macro = pd.DataFrame({"series": "VIX", "date": cal, "available": cal + pd.Timedelta(days=1), "value": vix.values})
     macro.to_csv(d / "macro.csv", index=False)
     eq = [a for a in market.assets.index if market.assets.at[a, "asset_class"] == "EQUITY"]
     rows = [(a, t, 0.001 if a.endswith("_1") else 0.05) for a in eq for t in cal[::5]]

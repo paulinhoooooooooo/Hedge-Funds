@@ -11,8 +11,8 @@ sans rien changer au programme actuel quand elle est désactivée :
                  pouvoir prédictif pèsent zéro ; achat seulement si la note pondérée est positive
   2  vrais flux  jambe rapide mesurée par les parts en circulation des ETF sectoriels (State Street)
                  au lieu du proxy prix / volume
-  4  météo       marché sous tension (VIX >= 30 ou stress financier de la Fed >= 1) : aucun achat,
-                 exposition ramenée à 50 %
+  4  météo       marché sous tension (VIX >= 30, ou obligations risquées en retard de 5 points sur
+                 les emprunts d'État en 3 mois) : aucun achat, exposition ramenée à 50 %
   5  comptes     pas d'achat d'une entreprise en perte ou valorisée plus de 60 fois ses bénéfices
   6  risques     volatilité cible du fonds 12 % et refus d'une ligne corrélée à plus de 0,85 avec
                  le portefeuille
@@ -41,8 +41,7 @@ import pandas as pd
 import flow_backtest as fb
 
 HORIZON = 63  # rendement des 3 mois suivants
-VIX_STRESS = 30.0
-FSI_STRESS = 1.0
+STRESS_RULES = {"VIX": (">=", 30.0), "CREDIT3M": ("<=", -0.05), "STLFSI4": (">=", 1.0)}
 REGIME_GROSS = 0.5
 MAX_PE = 60.0
 PROXY_THRESHOLDS = {"entry_flow_threshold": 0.0, "exit_flow_threshold": -0.05}  # proxy prix / volume
@@ -133,9 +132,9 @@ def load_macro(path: Path) -> Optional[pd.DataFrame]:
 
 
 def market_stress(macro: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.Series:
-    """Vrai les séances où la dernière valeur PUBLIÉE du VIX ou du stress financier dépasse le seuil."""
+    """Vrai les séances où la dernière valeur PUBLIÉE d'un indicateur de tension franchit son seuil."""
     out = pd.Series(False, index=calendar)
-    for series, limit in (("VIXCLS", VIX_STRESS), ("STLFSI4", FSI_STRESS)):
+    for series, (side, limit) in STRESS_RULES.items():
         m = macro[macro["series"] == series].sort_values("available")
         if m.empty:
             continue
@@ -144,7 +143,8 @@ def market_stress(macro: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.Series:
         vals = pd.Series(np.nan, index=calendar)
         ok = pos < len(calendar)
         vals.iloc[pos[ok]] = m["value"].to_numpy()[ok]
-        out |= vals.ffill() >= limit
+        known = vals.ffill()
+        out |= (known >= limit) if side == ">=" else (known <= limit)
     return out
 
 

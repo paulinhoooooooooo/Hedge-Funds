@@ -33,7 +33,7 @@ arrêtée ; `all` les enchaîne) :
             complétés par les Form 4 déposés depuis                          [SEC_CONTACT_EMAIL]
   etf_flows vrais flux des ETF sectoriels SPDR : parts en circulation publiées chaque jour par
             State Street (variation des parts x valeur liquidative), depuis 2003
-  macro     météo du marché : VIX et indice de stress financier (FRED, gratuit)
+  macro     météo du marché : VIX (CBOE) et tension sur le crédit (HYG contre IEF, cours Alpaca)
   fundamentals  bénéfices des 12 derniers mois et valorisation, à la date de publication
             (comptes déposés à la SEC, XBRL)                                  [SEC_CONTACT_EMAIL]
   alpaca    barres horaires de toutes les bourses (unité de temps « heure » du radar) et gros
@@ -102,10 +102,10 @@ EVENTS_START = "2019-01-01"
 ALPACA_DATA = "https://data.alpaca.markets/v2/stocks/{kind}"
 ALPACA_HISTORY_START = "2016-01-01"  # historique des barres Alpaca : depuis 2016
 SSGA_NAV_HISTORY = "https://www.ssga.com/library-content/products/fund-data/etfs/us/navhist-us-en-{etf}.xlsx"
-FRED_SERIES = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
-# Météo du marché : indice de la peur (VIX, quotidien) et indice de stress financier de la Fed de
-# Saint-Louis (hebdomadaire, semaine close le vendredi, publié le jeudi suivant)
-MACRO_SERIES = {"VIXCLS": 1, "STLFSI4": 7}  # série -> délai de publication en jours
+CBOE_VIX = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"
+# Météo du marché : indice de la peur (VIX, publié par la CBOE à la clôture) et tension sur le
+# crédit (obligations d'entreprises à haut rendement HYG contre emprunts d'État IEF, sur 3 mois)
+CREDIT_PAIR = ("HYG", "IEF")
 SEC_COMPANY_FACTS = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 BLOCK_MIN_NOTIONAL = 1e6  # un « gros bloc » : au moins 1 M$ en une seule transaction
 # Transactions exclues : prix moyen ou dérivé d'un autre produit, prix antérieur, hors séquence,
@@ -562,7 +562,10 @@ def alpaca_daily_frame(adjusted: list[dict], split_only: list[dict], raw: list[d
     adj, spl, raw_df = frame(adjusted), frame(split_only), frame(raw)
     ratio = (raw_df["c"] / spl["c"]).reindex(adj.index).ffill().bfill()
     factor = (ratio.shift(1) / ratio).fillna(1.0)
-    factor = factor.where((factor - 1.0).abs() > 1e-3, 1.0).round(6)
+    factor = factor.where((factor - 1.0).abs() > 1e-3, 1.0)
+    # rapport de division : un entier (4 pour 1) ou son inverse (regroupement 1 pour 10)
+    snapped = np.where(factor >= 1, np.round(factor), 1.0 / np.round(1.0 / factor.clip(lower=1e-9)))
+    factor = pd.Series(np.where(np.abs(snapped / factor - 1) < 0.01, snapped, factor), index=factor.index).round(6)
     return pd.DataFrame({"date": adj.index.strftime("%Y-%m-%d"), "close": raw_df["c"].reindex(adj.index).to_numpy(),
                          "adjOpen": adj["o"].to_numpy(), "adjHigh": adj["h"].to_numpy(), "adjLow": adj["l"].to_numpy(),
                          "adjClose": adj["c"].to_numpy(), "adjVolume": adj["v"].to_numpy(),
@@ -1132,6 +1135,9 @@ def alpaca_http() -> Http:
     secret = os.environ.get("ALPACA_API_SECRET_KEY", "").strip()
     if not key or not secret:
         sys.exit("ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY absents (variables d'environnement).")
+    looks_like_id = lambda v: v[:2] in ("PK", "AK", "CK")  # identifiant de clé Alpaca (compte d'essai, réel)
+    if looks_like_id(secret) and not looks_like_id(key):
+        key, secret = secret, key  # clé et secret saisis à l'envers
     # Offre gratuite : 200 requêtes par minute.
     return Http(headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret, "Accept": "application/json",
                          "User-Agent": "FlowFund-Research/1.0"}, min_interval=0.32)
@@ -1319,19 +1325,31 @@ def stage_etf_flows(http: Optional[Http] = None) -> None:
     print(f"Flux réels des ETF : {len(frames)} fonds, depuis {out['date'].min():%Y}")
 
 
+def credit_stress(high_yield: pd.Series, treasuries: pd.Series, days: int = 63) -> pd.Series:
+    """Écart de rendement sur 3 mois entre obligations d'entreprises risquées et emprunts d'État :
+    très négatif quand les investisseurs fuient le risque de crédit."""
+    both = pd.concat([high_yield, treasuries], axis=1).dropna()
+    ret = both / both.shift(days) - 1.0
+    return (ret.iloc[:, 0] - ret.iloc[:, 1]).dropna()
+
+
 def stage_macro(http: Optional[Http] = None) -> None:
     http = http or Http(headers={"User-Agent": "FlowFund-Research/1.0"}, min_interval=1.0)
-    frames = []
-    for series, lag in MACRO_SERIES.items():
-        df = pd.read_csv(io.BytesIO(http.get(FRED_SERIES.format(series=series))))
-        df.columns = ["date", "value"]
-        df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna()
-        df["date"] = pd.to_datetime(df["date"])
-        frames.append(df.assign(series=series, available=df["date"] + pd.Timedelta(days=lag)))
-    out = pd.concat(frames, ignore_index=True)[["series", "date", "available", "value"]]
-    out.to_csv(DATA / "macro.csv", index=False)
-    print(f"Météo du marché : {', '.join(MACRO_SERIES)} ({len(out):,} observations)")
+    vix = pd.read_csv(io.BytesIO(http.get(CBOE_VIX)))
+    frames = [pd.DataFrame({"series": "VIX", "date": pd.to_datetime(vix["DATE"], format="%m/%d/%Y"),
+                            "value": pd.to_numeric(vix["CLOSE"], errors="coerce")})]
+    if alpaca_keys_present():
+        raw = alpaca_query(alpaca_http(), "bars", list(CREDIT_PAIR),
+                           {"timeframe": "1Day", "adjustment": "all", "start": ALPACA_HISTORY_START})
+        closes = [pd.Series([r["c"] for r in raw.get(sym, [])],
+                            index=new_york_time([r["t"] for r in raw.get(sym, [])]).dt.normalize().to_numpy())
+                  for sym in CREDIT_PAIR]
+        spread = credit_stress(*closes)
+        frames.append(pd.DataFrame({"series": "CREDIT3M", "date": spread.index, "value": spread.to_numpy()}))
+    out = pd.concat(frames, ignore_index=True).dropna()
+    out["available"] = out["date"]  # connu à la clôture : utilisé à partir de la séance suivante
+    out[["series", "date", "available", "value"]].to_csv(DATA / "macro.csv", index=False)
+    print(f"Météo du marché : {', '.join(out['series'].unique())} ({len(out):,} observations)")
 
 
 def _duration_facts(entries: list[dict], lo: int, hi: int) -> pd.DataFrame:
