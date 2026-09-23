@@ -1,0 +1,111 @@
+//@version=6
+// =============================================================================
+// Empreinte des grands acteurs (banques, institutions) — prix et volume
+// =============================================================================
+// Même logique que backtest/market_footprint.py (troisième jambe du fonds) :
+//   * profil de volume sur 6 mois : point de contrôle (POC) et zone de valeur (70 % du volume),
+//     meilleure estimation publique du prix de revient des grands acheteurs ;
+//   * VWAP glissant 63 séances : prix moyen payé par les acheteurs du trimestre ;
+//   * ratio volume des hausses / volume des baisses (50 séances) ;
+//   * jours de distribution : baisse d'au moins 0,2 % sur un volume au moins 20 % au-dessus
+//     de sa moyenne 50 séances ; 5 ou plus sur 25 séances = alerte.
+// Le profil de volume est tracé pour la période la plus récente ; sur l'historique du
+// graphique, la coloration de fond utilise le VWAP à la place de la zone de valeur.
+// Fonctionne avec le plan gratuit (alertes dans l'application via alertcondition).
+// Unité de temps conseillée : 1D. Le FX au comptant n'a pas de vrai volume : utiliser les
+// contrats à terme (ex. CME:6E1! pour l'euro).
+// =============================================================================
+indicator("Empreinte des grands acteurs (prix / volume)", shorttitle = "Empreinte", overlay = true,
+     max_bars_back = 500, max_lines_count = 10)
+
+lenProfile = input.int(126, "Profil de volume : nombre de séances", minval = 20, maxval = 480)
+nBins = input.int(40, "Profil de volume : nombre de niveaux de prix", minval = 10, maxval = 100)
+valueArea = input.float(0.70, "Zone de valeur : part du volume", minval = 0.5, maxval = 0.95, step = 0.05)
+lenVwap = input.int(63, "VWAP glissant : nombre de séances", minval = 5)
+lenUd = input.int(50, "Ratio hausse / baisse : nombre de séances", minval = 10)
+lenDist = input.int(25, "Jours de distribution : fenêtre", minval = 5)
+distCount = input.int(5, "Jours de distribution : seuil d'alerte", minval = 1)
+
+float vol = nz(volume)
+
+// --- VWAP glissant
+float vwapRoll = math.sum(hlc3 * vol, lenVwap) / math.max(math.sum(vol, lenVwap), 1.0)
+
+// --- Ratio volume des hausses / volume des baisses
+float upVol = math.sum(close > close[1] ? vol : 0.0, lenUd)
+float downVol = math.sum(close < close[1] ? vol : 0.0, lenUd)
+float udRatio = downVol > 0 ? upVol / downVol : na
+
+// --- Jours de distribution
+float avgVol = ta.sma(vol, lenUd)[1]
+bool distDay = close / close[1] - 1.0 <= -0.002 and vol >= 1.2 * avgVol
+float distDays = math.sum(distDay ? 1.0 : 0.0, lenDist)
+
+// --- États
+bool distState = distDays >= distCount or (not na(udRatio) and udRatio <= 0.85 and close < vwapRoll)
+bool accState = not na(udRatio) and udRatio >= 1.15 and close >= vwapRoll
+
+plot(vwapRoll, "VWAP 63 séances (prix moyen des acheteurs du trimestre)", color = color.orange, linewidth = 2)
+bgcolor(distState ? color.new(color.red, 90) : accState ? color.new(color.teal, 92) : na, title = "État")
+plotshape(distDay, "Jour de distribution", shape.xcross, location.abovebar, color.new(color.red, 30), size = size.tiny)
+
+// --- Profil de volume de la période récente
+float hiP = ta.highest(high, lenProfile)
+float loP = ta.lowest(low, lenProfile)
+var float poc = na
+var float vah = na
+var float val = na
+var line pocLine = na
+var line vahLine = na
+var line valLine = na
+
+if barstate.islast and bar_index >= lenProfile
+    float stepP = (hiP - loP) / nBins
+    if stepP > 0
+        array<float> bins = array.new<float>(nBins, 0.0)
+        for k = 0 to lenProfile - 1
+            int b = math.min(nBins - 1, math.max(0, int((hlc3[k] - loP) / stepP)))
+            array.set(bins, b, array.get(bins, b) + nz(volume[k]))
+        int pocIdx = array.indexof(bins, array.max(bins))
+        float total = array.sum(bins)
+        int lo = pocIdx
+        int hi = pocIdx
+        float covered = array.get(bins, pocIdx)
+        while covered < valueArea * total and (lo > 0 or hi < nBins - 1)
+            float left = lo > 0 ? array.get(bins, lo - 1) : -1.0
+            float right = hi < nBins - 1 ? array.get(bins, hi + 1) : -1.0
+            if right >= left
+                hi += 1
+                covered += array.get(bins, hi)
+            else
+                lo -= 1
+                covered += array.get(bins, lo)
+        poc := loP + (pocIdx + 0.5) * stepP
+        val := loP + lo * stepP
+        vah := loP + (hi + 1) * stepP
+        line.delete(pocLine)
+        line.delete(vahLine)
+        line.delete(valLine)
+        int x0 = bar_index - lenProfile + 1
+        pocLine := line.new(x0, poc, bar_index, poc, color = color.new(color.blue, 0), width = 2, extend = extend.right)
+        vahLine := line.new(x0, vah, bar_index, vah, color = color.new(color.blue, 50), style = line.style_dashed, extend = extend.right)
+        valLine := line.new(x0, val, bar_index, val, color = color.new(color.blue, 50), style = line.style_dashed, extend = extend.right)
+
+// --- Tableau de synthèse
+var table tb = table.new(position.top_right, 2, 5, bgcolor = color.new(color.black, 25), border_width = 1)
+if barstate.islast
+    string zone = na(poc) ? "n.d." : close > vah ? "Au-dessus (grands acheteurs en gain)" : close < val ? "En dessous (grands acheteurs en perte)" : "Dans la zone (équilibre)"
+    table.cell(tb, 0, 0, "Zone de valeur", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 0, na(poc) ? "n.d." : str.tostring(val, format.mintick) + " – " + str.tostring(vah, format.mintick), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 1, "Cours vs zone", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 1, zone, text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 2, "Volume hausses / baisses", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 2, na(udRatio) ? "n.d." : str.tostring(udRatio, "#.##"), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 3, "Jours de distribution (25 s.)", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 3, str.tostring(distDays, "#"), text_color = color.white, text_size = size.small)
+    table.cell(tb, 0, 4, "État", text_color = color.white, text_size = size.small)
+    table.cell(tb, 1, 4, distState ? "Distribution" : accState ? "Accumulation" : "Neutre", text_color = color.white, text_size = size.small)
+
+// --- Alertes (disponibles avec le plan gratuit, dans l'application)
+alertcondition(distState and not distState[1], "Distribution des grands acteurs", "{{ticker}} : empreinte vendeuse des grands acteurs (prix / volume)")
+alertcondition(accState and not accState[1], "Accumulation des grands acteurs", "{{ticker}} : empreinte acheteuse des grands acteurs (prix / volume)")

@@ -85,7 +85,12 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
 
     prices = synthetic.prices.copy()
     future = prices.index > cutoff
-    prices.loc[future] *= np.exp(np.cumsum(rng.normal(0, 0.03, size=(future.sum(), prices.shape[1])), axis=0))
+    shock = np.exp(np.cumsum(rng.normal(0, 0.03, size=(future.sum(), prices.shape[1])), axis=0))
+    prices.loc[future] *= shock
+    high, low, volume = synthetic.high.copy(), synthetic.low.copy(), synthetic.volume.copy()
+    high.loc[future] *= shock * 1.05
+    low.loc[future] *= shock * 0.95
+    volume.loc[future] *= rng.uniform(0.1, 10.0, size=(future.sum(), volume.shape[1]))
     flows = synthetic.flows.copy()
     aum = synthetic.aum.copy()
     flows.loc[flows.index >= cutoff] = rng.normal(0, 1e8, size=flows.loc[flows.index >= cutoff].shape)
@@ -97,7 +102,8 @@ def test_no_lookahead_by_perturbing_the_future(synthetic):
     unpublished = available > cutoff
     h.loc[unpublished, "value"] *= rng.uniform(0.5, 1.5, size=unpublished.sum())
 
-    perturbed = fb.MarketData(prices=prices, holdings=h, flows=flows, aum=aum, assets=synthetic.assets)
+    perturbed = fb.MarketData(prices=prices, holdings=h, flows=flows, aum=aum, assets=synthetic.assets,
+                              high=high, low=low, volume=volume)
     alt = fb.run_backtest(perturbed, cfg)
     pd.testing.assert_series_equal(base.equity.loc[:cutoff], alt.equity.loc[:cutoff])
     j1 = base.journal[base.journal["date"] <= cutoff].reset_index(drop=True)

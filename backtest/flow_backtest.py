@@ -68,6 +68,8 @@ from typing import Iterable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
+from market_footprint import Footprint, compute_footprint, describe_footprint
+
 
 # =============================================================================
 # 1. PARAMÉTRAGE
@@ -117,6 +119,9 @@ class StrategyConfig:
     entry_flow_threshold: float = 0.0  # flux net 30 j / encours > 0 %
     exit_flow_threshold: float = -0.02  # flux sortant massif : < -2 % de l'encours sur 30 j
     flow_publication_lag: int = 1  # observations (jours de cotation) avant publication des flux
+
+    # --- Troisième jambe : empreinte de marché des grands acteurs (prix / volume, market_footprint.py)
+    use_footprint: bool = True  # actif dès que les données contiennent plus haut, plus bas et volume
 
     # --- Gestion des positions
     min_holding_days: int = 15  # horizon minimal : pas de sortie « flux » avant 15 jours
@@ -189,6 +194,7 @@ class MarketData:
     flows    : DataFrame [date x véhicule]  flux nets quotidiens (devise)
     aum      : DataFrame [date x véhicule]  encours du véhicule (devise)
     assets   : DataFrame index=actif        colonnes asset_class, flow_vehicle
+    high, low, volume : DataFrame [date x actif], optionnels — nécessaires à l'empreinte de marché
     """
 
     prices: pd.DataFrame
@@ -196,6 +202,13 @@ class MarketData:
     flows: pd.DataFrame
     aum: pd.DataFrame
     assets: pd.DataFrame
+    high: Optional[pd.DataFrame] = None
+    low: Optional[pd.DataFrame] = None
+    volume: Optional[pd.DataFrame] = None
+
+    @property
+    def has_ohlcv(self) -> bool:
+        return self.high is not None and self.low is not None and self.volume is not None
 
     def validate(self) -> None:
         missing_px = set(self.assets.index) - set(self.prices.columns)
@@ -249,7 +262,11 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
         hebdomadaire, on-chain quotidien) ;
       * les flux des véhicules réagissent immédiatement au régime, mais sont très bruités ;
       * les prix réagissent AVEC RETARD (moyenne exponentielle du régime, demi-vie 40 jours) :
-        c'est l'hypothèse centrale du flow trading (les flux précèdent les prix).
+        c'est l'hypothèse centrale du flow trading (les flux précèdent les prix) ;
+      * les grands acteurs laissent une empreinte dans les volumes (plus de volume les jours
+        de hausse en accumulation, les jours de baisse en distribution) et dans les mèches des
+        chandeliers. Cette empreinte est tirée d'un générateur aléatoire séparé : les cours de
+        clôture restent identiques avec ou sans elle.
     """
     rng = np.random.default_rng(seed)
     cal = _as_ns(pd.bdate_range(start, end))
@@ -341,7 +358,23 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
         flows[v] = flow
         aum[v] = level
 
-    return MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets)
+    # --- Plus hauts, plus bas et volumes : empreinte des grands acteurs
+    rng_v = np.random.default_rng(seed + 10_000)
+    sigma_d = np.array([math.hypot(*class_params[assets.at[a, "asset_class"]][1:]) for a in names]) / math.sqrt(252)
+    reg = regimes.astype(float)
+    tilt = 1.0 + 0.15 * reg * np.sign(returns)
+    volume = (1e6 * np.exp(0.35 * rng_v.standard_normal((n_t, n_a)))
+              * (1.0 + 0.5 * np.abs(returns) / sigma_d) * tilt)
+    close = prices.to_numpy()
+    open_ = np.vstack([close[:1], close[:-1]])
+    upper = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * (1.0 - 0.25 * reg)
+    lower = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * (1.0 + 0.25 * reg)
+    high = pd.DataFrame(np.maximum(open_, close) * (1.0 + upper), index=cal, columns=names)
+    low = pd.DataFrame(np.minimum(open_, close) * (1.0 - lower), index=cal, columns=names)
+    volume = pd.DataFrame(volume, index=cal, columns=names)
+
+    return MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets,
+                      high=high, low=low, volume=volume)
 
 
 def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
@@ -350,7 +383,11 @@ def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     data.assets.reset_index().to_csv(out / "assets.csv", index=False)
     px = data.prices.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset", value_name="close")
-    px.dropna().to_csv(out / "prices.csv", index=False)
+    if data.has_ohlcv:
+        for name, frame in (("high", data.high), ("low", data.low), ("volume", data.volume)):
+            extra = frame.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset", value_name=name)
+            px = px.merge(extra, on=["date", "asset"], how="left")
+    px.dropna(subset=["close"]).to_csv(out / "prices.csv", index=False)
     fl = data.flows.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="net_flow")
     au = data.aum.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="aum")
     fl.merge(au, on=["date", "vehicle"]).dropna(subset=["net_flow"]).to_csv(out / "flows.csv", index=False)
@@ -360,8 +397,9 @@ def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
 def load_market_from_csv(data_dir: str | Path) -> MarketData:
     """Charge vos données réelles. Schéma attendu (CSV, dates ISO AAAA-MM-JJ) :
 
-    assets.csv   : asset, asset_class (EQUITY | FX | COMMODITY | CRYPTO), flow_vehicle
-    prices.csv   : date, asset, close
+    assets.csv   : asset, asset_class (EQUITY | FX | COMMODITY | CRYPTO), flow_vehicle[, tv_symbol]
+    prices.csv   : date, asset, close[, high, low, volume]
+                   (high / low / volume activent l'empreinte de marché des grands acteurs)
     holdings.csv : asset, period_end, filing_date (vide si inconnue), value (> 0)
                    - actions   : actions détenues par les institutions de référence (13F agrégés,
                                  cf. build_13f_holdings_from_sec) ;
@@ -377,6 +415,10 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
     px = pd.read_csv(d / "prices.csv")
     px["date"] = _as_ns(px["date"])
     prices = px.pivot_table(index="date", columns="asset", values="close", aggfunc="last").sort_index()
+    ohlcv = {}
+    if {"high", "low", "volume"}.issubset(px.columns):
+        ohlcv = {name: px.pivot_table(index="date", columns="asset", values=name, aggfunc="last")
+                 .reindex(index=prices.index, columns=prices.columns) for name in ("high", "low", "volume")}
     fl = pd.read_csv(d / "flows.csv")
     fl["date"] = _as_ns(fl["date"])
     flows = fl.pivot_table(index="date", columns="vehicle", values="net_flow", aggfunc="sum").sort_index()
@@ -384,7 +426,7 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
     holdings = pd.read_csv(d / "holdings.csv")
     holdings["period_end"] = _as_ns(holdings["period_end"])
     holdings["filing_date"] = _as_ns(holdings["filing_date"])
-    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets)
+    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv)
     data.validate()
     return data
 
@@ -582,7 +624,9 @@ class Signals:
     dist_slow: pd.DataFrame  # institutions en allègement
     dist_fast: pd.DataFrame  # flux sortant massif
     dist_hard: pd.DataFrame  # liquidation institutionnelle
+    dist_foot: pd.DataFrame  # empreinte de marché vendeuse (prix / volume)
     score: pd.DataFrame  # intensité du signal (classement des candidats)
+    footprint: Optional[Footprint] = None
 
 
 def _window_min_periods(window: str) -> int:
@@ -640,11 +684,26 @@ def compute_signals(data: MarketData, cfg: StrategyConfig) -> Signals:
     dist_hard = io_change <= cfg.exit_io_change_hard
     score = io_change + flow_ratio
 
+    # Troisième jambe : empreinte prix / volume des grands acteurs. Elle interdit d'acheter
+    # pendant une distribution visible, renforce le classement des candidats en accumulation
+    # et compte comme une jambe à part entière dans l'échelle de sortie.
+    footprint = None
+    dist_foot = pd.DataFrame(False, index=cal, columns=names)
+    if cfg.use_footprint and data.has_ohlcv:
+        def aligned(frame: pd.DataFrame) -> pd.DataFrame:
+            out = frame.reindex(columns=names).copy()
+            out.index = _as_ns(out.index)
+            return out.reindex(cal)
+        footprint = compute_footprint(aligned(data.high), aligned(data.low), raw, aligned(data.volume))
+        dist_foot = footprint.distribution
+        entry = entry & ~dist_foot
+        score = score + 0.02 * footprint.accumulation
+
     return Signals(
         calendar=cal, prices=prices, price_valid=price_valid, returns=returns, vol=vol,
         io_change=io_change, io_period_end=io_pe, flow_ratio=flow_ratio,
         flow_ratio_short=flow_ratio_short, entry=entry, dist_slow=dist_slow,
-        dist_fast=dist_fast, dist_hard=dist_hard, score=score,
+        dist_fast=dist_fast, dist_hard=dist_hard, dist_foot=dist_foot, score=score, footprint=footprint,
     )
 
 
@@ -712,6 +771,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
     d_slow = sig.dist_slow.to_numpy(bool)
     d_fast = sig.dist_fast.to_numpy(bool)
     d_hard = sig.dist_hard.to_numpy(bool)
+    d_foot = sig.dist_foot.to_numpy(bool)
     score = sig.score.to_numpy(float)
     vol = sig.vol.to_numpy(float)
     cost_rate = np.array([ASSET_CLASS_SPECS[c].cost_bps for c in classes]) * 1e-4 * cfg.cost_multiplier
@@ -870,18 +930,21 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
         for a in np.flatnonzero((scale > 0) & ~decided):
             if (t - entry_date[a]).days < cfg.min_holding_days:
                 continue
+            legs = [name for name, flag in (
+                (f"institutions en allègement (<= {_pct(cfg.exit_io_change, 0)})", d_slow[i, a]),
+                (f"flux sortant massif (<= {_pct(cfg.exit_flow_threshold, 0)} de l'encours)", d_fast[i, a]),
+                ("empreinte prix / volume vendeuse (grands acteurs en distribution)", d_foot[i, a]),
+            ) if flag]
             if d_hard[i, a]:
                 decide(i, t, a, 0.0, "EXIT_INSTITUTIONAL_LIQUIDATION", False,
                        f"Les institutions de référence liquident ({flow_text(i, a)}) : "
                        f"baisse au-delà du seuil de {_pct(cfg.exit_io_change_hard, 0)}, thèse de flux invalidée.", nav)
-            elif d_slow[i, a] and d_fast[i, a]:
+            elif len(legs) >= 2:
                 decide(i, t, a, 0.0, "EXIT_DISTRIBUTION_CONFIRMED", False,
-                       f"Inversion des deux jambes : {flow_text(i, a)}. Allègement institutionnel "
-                       f"(<= {_pct(cfg.exit_io_change, 0)}) ET flux sortant massif (<= {_pct(cfg.exit_flow_threshold, 0)}).", nav)
-            elif (d_slow[i, a] or d_fast[i, a]) and scale[a] > cfg.partial_exit_fraction + 1e-12:
-                leg = "jambe lente (institutions en allègement)" if d_slow[i, a] else "jambe rapide (flux sortant massif)"
+                       f"Distribution confirmée par {len(legs)} jambes sur 3 : {' ; '.join(legs)}. {flow_text(i, a)}.", nav)
+            elif legs and scale[a] > cfg.partial_exit_fraction + 1e-12:
                 decide(i, t, a, cfg.partial_exit_fraction, "REDUCE_DISTRIBUTION_ALERT", False,
-                       f"Premier signal de distribution sur la {leg} : {flow_text(i, a)}. "
+                       f"Premier signal de distribution — {legs[0]} : {flow_text(i, a)}. "
                        f"Ligne ramenée à {_pct(cfg.partial_exit_fraction, 0, False)} en attendant confirmation.", nav)
             elif (scale[a] < 1.0 and entry_sig[i, a] and derisk_until is None and valid[i, a]
                   and (last_reduce[a] is None or (t - last_reduce[a]).days >= cfg.reentry_cooldown_days)):
@@ -1066,9 +1129,10 @@ REVIEW_HORIZONS = (
 
 
 def _exit_signal(sig: Signals, i: int, a: int, scale: float) -> str:
-    if sig.dist_hard.iat[i, a] or (sig.dist_slow.iat[i, a] and sig.dist_fast.iat[i, a]):
+    legs = int(sig.dist_slow.iat[i, a]) + int(sig.dist_fast.iat[i, a]) + int(sig.dist_foot.iat[i, a])
+    if sig.dist_hard.iat[i, a] or legs >= 2:
         return "VENTE IMMÉDIATE (niveau 2)"
-    if sig.dist_slow.iat[i, a] or sig.dist_fast.iat[i, a]:
+    if legs == 1:
         return "ALLÈGEMENT PROGRESSIF (niveau 1)"
     if 0 < scale < 1 and sig.entry.iat[i, a]:
         return "RENFORCER"
@@ -1157,6 +1221,8 @@ def review_positions(result: BacktestResult, date=None, include_all: bool = Fals
                              "(accumulation dans la faiblesse).")
             else:
                 parts.append(f"Prix ({_pct(price_ret)} sur 30 j) et flux alignés.")
+        if sig.footprint is not None:
+            parts.append(describe_footprint(sig.footprint, sig.prices.iat[i_t, j], i_t, j))
         probas = [f"{lbl} {stats[(a, lbl)][0]:.0%} (base {stats[(a, lbl)][2]:.0%})"
                   for lbl, *_ in REVIEW_HORIZONS if (a, lbl) in stats]
         if probas:

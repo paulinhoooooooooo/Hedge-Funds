@@ -2,3 +2,4 @@ numpy>=1.26
 pandas>=2.2
 matplotlib>=3.8   # optionnel : graphique du backtest
 pytest>=8         # tests
+mcp>=1.2          # optionnel : serveur MCP du fonds (mcp_server/)

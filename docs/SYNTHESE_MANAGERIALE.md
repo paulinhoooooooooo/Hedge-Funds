@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Rédigé par** | Direction de la Technologie (CTO) et Direction des Investissements (CIO) |
-| **Version** | v1.1 — 23/09/2026 — décisions des fondateurs intégrées (§9) |
-| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `tests/` (29 tests) |
+| **Version** | v1.2 — 23/09/2026 — décisions des fondateurs (§9) ; troisième jambe « empreinte des grands acteurs » (§1.3) ; serveur MCP du fonds (§4.4) |
+| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/market_footprint.py` (empreinte prix / volume), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `mcp_server/` (serveur MCP du fonds), `tests/` (37 tests) |
 
 ---
 
@@ -13,11 +13,12 @@
 
 **Verdict : l'organisation est validée, sous cinq conditions** (§2.3). La plus importante : il manque aujourd'hui un **décideur final**. Les analystes recommandent et le Risk Manager valide, mais personne n'arbitre. Il faut un CIO / gérant qui préside un comité d'investissement hebdomadaire.
 
-**La stratégie en une phrase.** On achète quand deux sources indépendantes montrent que les grandes institutions accumulent un actif :
+**La stratégie en une phrase.** On achète quand deux sources indépendantes montrent que les grandes institutions accumulent un actif, et que le marché ne montre pas l'inverse :
 - une source **lente mais précise**, le *positionnement* (13F, COT, on-chain) ;
-- une source **rapide mais bruitée**, les *flux de fonds* (ETF, EPFR, ETP).
+- une source **rapide mais bruitée**, les *flux de fonds* (ETF, EPFR, ETP) ;
+- une troisième source, **l'empreinte des grands acteurs** (banques, institutions) dans le prix et le volume, qui interdit d'acheter pendant une distribution visible (§1.3).
 
-On vend par paliers quand ces mêmes sources se retournent. Les stop-loss de prix restent un garde-fou séparé, confié au Risk Manager.
+On vend par paliers quand ces sources se retournent : une seule en alerte, on allège ; deux sur trois, on sort. Les stop-loss de prix restent un garde-fou séparé, confié au Risk Manager.
 
 **Pourquoi l'Exit Management est le cœur du dispositif, et pas un accessoire.** La jambe lente arrive en retard par construction : un 13F est publié jusqu'à 45 jours après la fin du trimestre. Sans jambe rapide, le fonds découvrirait une distribution institutionnelle avec 2 à 4 mois de retard. C'est ce qui justifie :
 - la sortie à trois niveaux (§3.4) ;
@@ -58,6 +59,31 @@ On vend par paliers quand ces mêmes sources se retournent. Les stop-loss de pri
 | Matières premières | CFTC COT — Managed Money (hebdo, +3 j) | Flux et stocks des ETC/ETF (ex. tonnage des ETF or) |
 | Crypto | On-chain : offre des Long-Term Holders, wallets institutionnels (J+1) | Flux des ETP/ETF spot, netflows des exchanges |
 | Rôle dans les décisions | **Valide** la thèse (entrée) et **l'invalide** (sortie) | **Confirme** l'entrée et **alerte en premier** à la sortie |
+
+### 1.3 Troisième jambe : l'empreinte des grands acteurs dans le prix et le volume
+
+**Demande des fondateurs : suivre aussi les banques sur les marchés, en regardant où elles sont à travers le prix et le volume.** Les grands acteurs ne peuvent pas cacher leur volume. Là où ils achètent ou vendent massivement, le marché en garde la trace, chaque jour et sans délai de publication.
+
+| Mesure | Ce qu'elle montre | Lecture |
+|---|---|---|
+| **Profil de volume sur 6 mois** : zone de valeur (70 % du volume) et prix le plus échangé | Le prix auquel les grands acheteurs ont constitué leurs positions : la meilleure estimation publique de leur prix de revient | Cours au-dessus de la zone : ils sont en gain et la défendent. En dessous : ils sont en perte, et les sorties commencent souvent. |
+| **VWAP sur 63 séances** | Le prix moyen payé par les acheteurs du dernier trimestre | Cours au-dessus : les acheteurs récents gagnent de l'argent. |
+| **Volume des hausses / volume des baisses** (50 séances) | Qui domine : acheteurs ou vendeurs | ≥ 1,15 avec un cours au-dessus du VWAP : **accumulation**. |
+| **Jours de distribution** (25 séances) : baisse ≥ 0,2 % sur un volume ≥ 1,2 × la moyenne | Les ventes lourdes des grands acteurs (règle de W. O'Neil, durcie pour les actions individuelles) | 5 ou plus : **distribution**. Même chose si le ratio ≤ 0,85 et le cours sous la zone de valeur. |
+
+**Place dans les décisions :**
+- **à l'achat**, une empreinte vendeuse interdit d'entrer, et une empreinte acheteuse fait passer le candidat devant les autres ;
+- **à la vente**, c'est une jambe à part entière : avec les flux de fonds, elle peut confirmer une distribution **sans attendre le 13F suivant** (jusqu'à 4 mois et demi de retard).
+
+**Données nominatives sur les banques (gratuites, à intégrer en phase 1) :**
+- **rapport COT de la CFTC**, catégorie « Dealer / Intermediary », qui regroupe essentiellement les banques sur les contrats à terme de devises, de taux et d'indices ;
+- **volumes des plateformes alternatives (« dark pools »)** publiés par la FINRA, titre par titre, avec quelques semaines de délai ;
+- **13F des banques elles-mêmes** (JPMorgan, Goldman Sachs…), déjà lus par le moteur.
+
+**Honnêteté sur les limites.**
+- Le prix et le volume montrent la *pression* des grands acteurs, pas leur *identité*.
+- Une grande partie du volume des banques est de la tenue de marché couverte : ce n'est pas un pari.
+- Les méthodes populaires qui prétendent lire les ordres des banques sur un graphique (« order blocks », « liquidity grabs ») n'ont pas de validation sérieuse. Le fonds n'utilise que des mesures objectives, calculables et testées sans biais d'anticipation.
 
 ---
 
@@ -165,8 +191,8 @@ Chaque prédiction est accompagnée d'une note en quatre blocs, pré-rédigée p
 | Niveau | Condition (paramètres par défaut) | Action | Exécution | Qui décide |
 |---|---|---|---|---|
 | **0 — Conserver** | Aucune jambe en distribution | Maintien ; renforcement si la ré-accumulation est confirmée | — | Comité |
-| **1 — Alerte distribution** | **Une** jambe se retourne : positionnement ≤ −3 % sur un trimestre **ou** flux 30 j ≤ −2 % de l'encours | **Allègement progressif** à 50 % de la ligne | VWAP sur 5 séances | CIO, sur proposition de l'analyste |
-| **2 — Distribution confirmée** | **Les deux** jambes se retournent, **ou** liquidation institutionnelle (positionnement ≤ −10 %) | **Sortie totale** ; thèse de flux invalidée | VWAP sur 5 séances | CIO, validé par le Risk Manager |
+| **1 — Alerte distribution** | **Une** jambe sur trois se retourne : positionnement ≤ −3 % sur un trimestre, **ou** flux 30 j ≤ −2 % de l'encours, **ou** empreinte prix / volume vendeuse | **Allègement progressif** à 50 % de la ligne | VWAP sur 5 séances | CIO, sur proposition de l'analyste |
+| **2 — Distribution confirmée** | **Deux** jambes sur trois se retournent, **ou** liquidation institutionnelle (positionnement ≤ −10 %) | **Sortie totale** ; thèse de flux invalidée | VWAP sur 5 séances | CIO, validé par le Risk Manager |
 | **3 — Risque** | Perte critique sur la ligne (max(25 %, 0.75 × volatilité annuelle)) ou drawdown du portefeuille ≤ −20 % | Sortie de la ligne, ou réduction de 50 % de toutes les lignes et gel des entrées pendant 63 jours | Accélérée, sur 2 séances | **Risk Manager, automatiquement** |
 
 **Pourquoi une réponse graduée ?**
@@ -179,7 +205,7 @@ Chaque prédiction est accompagnée d'une note en quatre blocs, pré-rédigée p
   - aucun levier.
 - **Stops de prix bien séparés.** Le stop critique ne sert pas à timer le marché : c'est une assurance du Risk Manager, **ajustée à la volatilité**. Un seuil fixe de 25 % se déclenchait sur le seul bruit des crypto-monnaies (18 sorties sur 22 en crypto lors d'un premier calibrage).
 
-**Résultat sur le backtest de démonstration :** 51 des 68 sorties sont des « distributions confirmées » (niveau 2), et 17 sont des stops de risque (niveau 3). La détention médiane est de 531 jours, cohérente avec l'horizon moyen/long terme visé.
+**Résultat sur le backtest de démonstration :** 104 des 117 sorties sont des « distributions confirmées » (niveau 2), et 13 sont des stops de risque (niveau 3). La détention médiane est de 309 jours, cohérente avec l'horizon moyen/long terme visé.
 
 ### 3.5 Circuit de décision (qui fait quoi)
 
@@ -255,6 +281,7 @@ flowchart LR
 | Watchlist du fonds | `outputs/tradingview/watchlist_fonds.txt` (via `--tradingview`) | Import dans TradingView ; trois sections : lignes actives, alertes de distribution, candidats à l'accumulation |
 | Journal sur le graphique | `outputs/tradingview/pine/<actif>.pine` | Indicateur Pine v6 par ligne active : marqueurs d'achat, d'allègement, de sortie et de stop (avec la justification en infobulle), période de détention colorée, tableau de la dernière Matrice prédictive |
 | Smart Money Flow Monitor | `tradingview/smart_money_flow_monitor.pine` | Indicateur fondé sur les données natives : Chaikin Money Flow, divergence prix / ligne Accumulation-Distribution, volume anormal, M2 US en glissement annuel ; alertes JSON |
+| Empreinte des grands acteurs | `tradingview/empreinte_grands_acteurs.pine` | Même calcul que la troisième jambe du moteur : zone de valeur et prix le plus échangé tracés sur le graphique, VWAP 63 séances, ratio hausses / baisses, jours de distribution ; alertes dans l'application (plan gratuit) |
 | Récepteur d'alertes | `tradingview/webhook_receiver.py` | Reçoit les webhooks TradingView (secret partagé), les ajoute au journal d'alertes lu en revue. **Une alerte TradingView ne déclenche jamais d'ordre** : c'est une confirmation. |
 
 **Usage par rôle :**
@@ -286,6 +313,28 @@ flowchart LR
 
 Pour intégrer des graphiques TradingView *alimentés par nos propres données* dans un tableau de bord interne, la bibliothèque officielle *Advanced Charts* de TradingView est la voie à étudier, sous réserve de ses conditions de licence.
 
+### 4.4 Un serveur MCP branché sur le compte TradingView ? Non. Le serveur MCP du fonds, oui.
+
+Les fondateurs ont proposé un serveur MCP open source qui lirait leur compte TradingView pour alimenter le fonds. **L'équipe l'écarte**, pour quatre raisons :
+1. **Conditions d'utilisation.** TradingView interdit la collecte automatisée de ses données. Le projet open source qui le fait (tradesdontlie/tradingview-mcp) le signale lui-même. Le risque : la fermeture du compte.
+2. **Licences des Bourses.** Les cours affichés sur TradingView sont licenciés pour être *regardés*. Les faire lire par les algorithmes d'un fonds est un usage « non-display », que les Bourses facturent à part. C'est un point bloquant pour le CCO.
+3. **Sécurité.** Le serveur devrait détenir l'accès au compte (identifiants ou session), et un port de débogage resterait ouvert sur le poste.
+4. **Pas les bonnes données.** TradingView ne donne ni les 13F par gérant, ni les flux des fonds, ni les volumes des dark pools sous une forme exploitable en backtest.
+
+**Solution retenue : le serveur MCP du fonds** (`mcp_server/serveur_fonds.py`), open source et en lecture seule. Un assistant IA (Claude Desktop, Claude Code) peut interroger en français le travail du fonds :
+
+| Outil | Question type |
+|---|---|
+| `etat_du_fonds` | « Comment va le fonds ? » |
+| `revue_des_positions` | « Que dit la revue des lignes cette semaine ? » |
+| `empreinte_grands_acteurs` | « Où sont les grands acteurs sur l'or ? » |
+| `analyser_actif` | « Analyse-moi Nvidia. » |
+| `candidats_a_l_achat` | « Quels actifs réunissent les conditions d'achat ? » |
+| `journal_des_decisions` | « Pourquoi le fonds a-t-il vendu le cuivre ? » |
+| `lister_actifs` | « Quels actifs suivez-vous ? » |
+
+Ses données viennent des sources officielles et gratuites (SEC, CFTC, FINRA, cours publics), sans aucune restriction d'usage. TradingView reste l'écran de travail, avec les indicateurs Pine du fonds.
+
 ---
 
 ## 5. Protocole de backtest
@@ -310,7 +359,7 @@ Le cahier des charges citait `backtrader` ou `vectorbt`. Nous avons retenu un **
 | Exigence | Mise en œuvre | Contrôle |
 |---|---|---|
 | **Signal d'entrée** | Positionnement ≥ +3 % sur ~1 trimestre **et** flux net 30 j / encours > 0 (option « chaque jour positif ») ; classement des candidats par intensité | Test sur la règle stricte vs cumulée |
-| **Signal de sortie** | Échelle de niveaux 1 à 3 (§3.4), indépendante des stops de prix | Test du scénario accumulation → alerte → sortie, aux dates exactes |
+| **Signal de sortie** | Échelle de niveaux 1 à 3 (§3.4), vote à deux jambes sur trois, indépendante des stops de prix | Test du scénario accumulation → alerte → sortie, aux dates exactes ; test de la sortie anticipée par l'empreinte prix / volume |
 | **Délais de publication** | 13F : fin de trimestre + 45 j ; COT : +3 j ; on-chain et flux : J+1 ; + 1 jour de traitement ; exécution au plus tôt le lendemain du signal | **Test de perturbation** : modifier tout ce qui n'était pas publié à la date T ne change rien au backtest jusqu'à T |
 | **Qualité des 13F** | Seules les déclarations initiales, déposées avant l'échéance, sont retenues (ni amendements, ni dépôts tardifs, ni options) | Test sur un jeu SEC fictif |
 | **Exécution réaliste** | Ordres fractionnés sur 5 séances au cours de clôture (proxy VWAP) ; coûts par classe d'actifs (actions 10 pb, FX 2 pb, matières premières 5 pb, crypto 20 pb) | Coûts et turnover reportés |
@@ -330,21 +379,32 @@ Démonstration (graine 7, 2012–2025, 24 actifs : 12 actions, 4 devises, 4 mati
 
 | Métrique | Stratégie (nette de coûts) | Univers équipondéré (sans coûts) |
 |---|---|---|
-| CAGR | +9.9 % | +5.3 % |
-| Volatilité | 9.2 % | 12.4 % |
-| **Sharpe** | **0.86** | 0.32 |
-| **Sortino** | **1.23** | 0.45 |
-| **Max Drawdown** | **−16.5 %** | −22.7 % |
-| **Recovery Time** (creux → plus-haut) | 638 jours | non récupéré |
-| Allers-retours / taux de réussite | 68 / 65 % | — |
-| Détention médiane | 531 jours | — |
-| Turnover annuel / coûts cumulés | 1.6× / 3.7 % du capital | — |
+| CAGR | +11.5 % | +5.3 % |
+| Volatilité | 8.7 % | 12.4 % |
+| **Sharpe** | **1.07** | 0.32 |
+| **Sortino** | **1.56** | 0.45 |
+| **Max Drawdown** | **−18.3 %** | −22.7 % |
+| **Recovery Time** (creux → plus-haut) | 412 jours | non récupéré |
+| Allers-retours / taux de réussite | 117 / 62 % | — |
+| Détention médiane | 309 jours | — |
+| Turnover annuel / coûts cumulés | 2.6× / 7.1 % du capital | — |
 
 Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
-- Sharpe moyen de **1.02** (de 0.69 à 1.31), contre 0.61 pour l'univers ;
-- Max Drawdown de −10 % à −22 %.
+- Sharpe moyen de **1.16** (de 0.87 à 1.61), contre 0.61 pour l'univers ;
+- Max Drawdown de −8 % à −22 % (−14 % en moyenne).
 
-**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.02, **sans écart systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
+**Apport de la troisième jambe** (moyenne des 8 mondes) :
+
+| | Sans empreinte | Avec empreinte |
+|---|---|---|
+| Sharpe | 1.02 | **1.16** |
+| Rendement annuel | +11.7 % | **+12.5 %** |
+| Pire perte moyenne | −15.0 % | **−14.1 %** |
+| Détention médiane / turnover | 508 j / 1.7× | 293 j / 2.7× |
+
+Le monde synthétique contient cette empreinte **par construction**. Ces chiffres montrent que la jambe fonctionne comme prévu, pas qu'elle rapportera autant en réel. Un premier calibrage, où un « jour de distribution » exigeait seulement un volume supérieur à la veille, se déclenchait sur le bruit : 165 allers-retours et une détention médiane de 6 mois. D'où la règle durcie à 1,2 × le volume moyen.
+
+**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.16, **sans écart systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
 
 ![Backtest synthétique](img/backtest_synthetique.png)
 
@@ -359,6 +419,7 @@ Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
 | Prévisions à 3 horizons | Mathématicien | `review_positions` (modèle de référence) → modèles du Quant | Calibration (score de Brier) |
 | Justifier chaque prédiction | Analyste + Mathématicien | Justification générée + note de l'analyste | Comité hebdomadaire |
 | Émettre l'Exit Signal | Analyste → CIO | Échelle de niveaux 0 à 3 | Validation du Risk Manager |
+| Suivre les banques et grands acteurs dans le marché | Analyste Flux, Execution Trader | `market_footprint.py`, indicateur Pine « Empreinte », outil MCP `empreinte_grands_acteurs` | Revue hebdomadaire |
 | Exécuter sans perturber le marché | Execution Trader | Exécution fractionnée (5 séances), OMS / EMS | Analyse des coûts de transaction |
 | Limites de risque et coupure | Risk Manager | Stop critique ajusté à la volatilité, coupe-circuit de drawdown, écrêtage | Tableau de bord quotidien |
 | Conformité | CCO | Registre des seuils, revue des licences (dont TradingView et MCP) | Revue trimestrielle |
@@ -407,8 +468,11 @@ Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
 | Cours quotidiens (actions et ETF, titres radiés inclus) | Source publique gratuite | À construire |
 | Univers | Actions américaines détenues par la liste Smart Money, reconstituées chaque trimestre à partir des 13F : les titres radiés depuis restent dans l'historique, donc pas de biais du survivant | À construire |
 | Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | À construire |
+| Empreinte des grands acteurs | Calculée à partir des cours, plus hauts, plus bas et volumes | **Livrée** (`market_footprint.py`) |
+| Banques sur les contrats à terme | Rapport COT de la CFTC, catégorie « Dealer / Intermediary » | À construire |
+| Volumes des dark pools, titre par titre | Données « ATS » publiées par la FINRA | À construire |
 
-Les téléchargements (SEC, OpenFIGI, cours) ne peuvent pas partir de l'environnement de développement actuel : son accès réseau bloque ces sites. **Seule action requise des fondateurs** : autoriser ces domaines dans les réglages réseau de l'environnement, ou faire tourner l'étape de téléchargement sur un autre poste.
+Les téléchargements (SEC, OpenFIGI, CFTC, FINRA, cours) ne peuvent pas partir de l'environnement de développement actuel : son accès réseau bloque ces sites. **Seule action requise des fondateurs** : autoriser ces domaines dans les réglages réseau de l'environnement, ou faire tourner l'étape de téléchargement sur un autre poste.
 
 **Limite assumée du budget nul.** Le proxy volume mesure la pression acheteuse sur le marché, pas les souscriptions et rachats réels des fonds. Si la phase 1 est concluante, l'achat d'un historique de flux réels (parts en circulation des ETF, puis EPFR) sera la première dépense recommandée.
 
@@ -427,6 +491,7 @@ Les téléchargements (SEC, OpenFIGI, cours) ne peuvent pas partir de l'environn
 | Budget données | **Gratuit** | 13F de la SEC ; proxy volume pour les flux (§8.1) |
 | Profil de risque | **Équilibré** | Stop max(25 %, 0.75 × volatilité), coupe-circuit −20 %, 2 % de risque par ligne, 12 lignes maximum |
 | TradingView | **Plan gratuit**, sans serveur MCP | Visualisation uniquement ; alertes produites par le moteur (§4.3) |
+| Suivre les banques | **Oui, à travers le prix et le volume** | Troisième jambe « empreinte des grands acteurs » (§1.3) |
 
 ### 9.2 Décisions techniques de l'équipe
 
@@ -436,3 +501,6 @@ Les téléchargements (SEC, OpenFIGI, cours) ne peuvent pas partir de l'environn
 | Sélection Smart Money | Chaque trimestre, les **50 gérants** au meilleur ratio d'information sur **8 trimestres**, calculé sur leur rendement « copie conforme » en excès de la moyenne des gérants ; 20 à 1 500 lignes en portefeuille | Récompense la régularité plutôt qu'un coup de chance ; exclut les quasi-indiciels, dont les achats ne sont pas des convictions |
 | Flux à budget nul | Chaikin Money Flow 30 jours de l'ETF sectoriel ; achat si > 0, alerte de distribution si ≤ −0,05 | Seuils identiques à l'indicateur TradingView : ce que voit l'équipe correspond à ce que décide le moteur |
 | Moteur de backtest | **Moteur maison** conservé | Voir §5.1 |
+| Empreinte des grands acteurs | Profil de volume 6 mois (zone de valeur 70 %), VWAP 63 séances, ratio hausses / baisses 50 séances (accumulation ≥ 1,15 ; distribution ≤ 0,85 sous la zone de valeur), jours de distribution (baisse ≥ 0,2 % sur volume ≥ 1,2 × la moyenne ; alerte à 5 sur 25 séances) | Horizons alignés sur le fonds (trimestre, semestre) ; seuils classiques, durcis là où le bruit les déclenchait |
+| Règle de sortie | **Deux jambes sur trois** pour une sortie totale, une seule pour un allègement | Aucune source seule ne fait vendre toute la ligne ; la jambe lente (13F) n'est plus indispensable pour sortir |
+| MCP et TradingView | **Pas de serveur branché sur le compte TradingView** ; serveur MCP du fonds, en lecture seule | Conditions d'utilisation, licences des Bourses, sécurité (§4.4) |

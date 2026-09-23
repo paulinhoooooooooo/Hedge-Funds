@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "fonds-flux": {
+      "command": "python3",
+      "args": ["mcp_server/serveur_fonds.py"],
+      "env": {}
+    }
+  }
+}
