@@ -8,9 +8,13 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 |---|---|
 | [`docs/SYNTHESE_MANAGERIALE.md`](docs/SYNTHESE_MANAGERIALE.md) | Synthèse managériale : validation de l'organisation, protocole d'évaluation continue et de sortie, architecture, TradingView, résultats, questions ouvertes |
 | [`backtest/flow_backtest.py`](backtest/flow_backtest.py) | Moteur de backtest : délais de publication appliqués (13F, COT, flux), sortie à trois niveaux, exécution fractionnée, métriques de risque, Matrice prédictive |
+| [`backtest/smart_money.py`](backtest/smart_money.py) | Liste Smart Money point-in-time (gérants sélectionnés sur leurs 13F passés), indice de détention à composition constante, proxy de flux gratuit à partir des volumes |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateur Pine *Smart Money Flow Monitor* et récepteur des alertes webhook |
-| [`tests/`](tests/) | 24 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 29 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+
+**Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
+gratuites, risque équilibré, TradingView gratuit (détail au §9 de la synthèse).
 
 ## Démarrage rapide
 

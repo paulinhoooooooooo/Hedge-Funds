@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Rédigé par** | Direction de la Technologie (CTO) et Direction des Investissements (CIO) |
-| **Version** | v1 — 23/09/2026 — pour validation par les fondateurs |
-| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `tests/` (24 tests) |
+| **Version** | v1.1 — 23/09/2026 — décisions des fondateurs intégrées (§9) |
+| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `tests/` (29 tests) |
 
 ---
 
@@ -30,7 +30,9 @@ On vend par paliers quand ces mêmes sources se retournent. Les stop-loss de pri
 
 **Ce qu'il ne démontre pas encore.** La performance *réelle*. Cela exige les données 13F / EPFR / COT historiques en point-in-time : c'est la phase 1 de la feuille de route (§8).
 
-**TradingView** devient la **couche visuelle, collaborative et d'alerte** de l'équipe (§4.3). Ce n'est pas la source des signaux, car TradingView ne fournit ni 13F, ni EPFR, ni COT sous une forme exploitable en backtest.
+**TradingView** devient la **couche visuelle et collaborative** de l'équipe (§4.3). Ce n'est pas la source des signaux, car TradingView ne fournit ni 13F, ni EPFR, ni COT sous une forme exploitable en backtest.
+
+**Décisions prises le 23/09/2026** (§9) : acheteur uniquement, liste Smart Money, premier test sur les actions US avec des données gratuites, profil de risque équilibré, TradingView gratuit. Les choix techniques relèvent désormais de l'équipe, qui les documente au §9.
 
 ---
 
@@ -277,6 +279,11 @@ flowchart LR
 - **Phase 2 : pilote du premier serveur MCP**, en environnement isolé et pour la recherche uniquement, **après revue du CCO**.
 - **Le second serveur** seulement avec l'accord écrit de TradingView.
 
+**Décision des fondateurs : plan TradingView gratuit, sans serveur MCP.** Conséquences :
+- **Pas de webhooks** (réservés aux plans payants). Les alertes du fonds viennent donc du **moteur lui-même**, exécuté chaque jour : la revue des positions (`revue_positions.csv`) et la watchlist signalent les lignes en alerte de distribution.
+- **TradingView sert à regarder**, pas à alerter : graphiques, watchlist importée, indicateurs Pine du journal et du *Smart Money Flow Monitor*. Les alertes intégrées à TradingView restent possibles dans l'application, en nombre limité.
+- **Le récepteur webhook est conservé** et pourra servir tel quel si le fonds passe un jour à un plan payant.
+
 Pour intégrer des graphiques TradingView *alimentés par nos propres données* dans un tableau de bord interne, la bibliothèque officielle *Advanced Charts* de TradingView est la voie à étudier, sous réserve de ses conditions de licence.
 
 ---
@@ -380,24 +387,52 @@ Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
 
 | Phase | Échéance | Livrables | Critère de passage |
 |---|---|---|---|
-| **0 — Cadrage** | M+1 | Réponses aux questions ouvertes (§9) ; contrats de données ; nomination du CIO | Paramètres gelés ex ante |
-| **1 — Actions US réelles** | M+3 | Entrepôt point-in-time : 13F 2014–2025 (jeux SEC) + flux des ETF sectoriels ; premier backtest réel en walk-forward | Sharpe hors échantillon > 0.5 après coûts ; stabilité des paramètres |
+| **0 — Cadrage** | M+1 | Décisions des fondateurs (§9, **prises le 23/09/2026**) ; accès réseau aux sources gratuites ; nomination du CIO | Paramètres gelés ex ante |
+| **1 — Actions US réelles, données gratuites** | M+3 | Voir le détail ci-dessous ; premier backtest réel en walk-forward | Sharpe hors échantillon > 0.5 après coûts ; stabilité des paramètres |
 | **2 — Multi-actifs** | M+5 | COT (FX, matières premières), on-chain et flux des ETP (crypto), EPFR | Mêmes critères, par classe d'actifs |
 | **3 — Paper trading** | M+6 à M+9 | Comité hebdomadaire réel avec la Matrice prédictive ; déploiement TradingView ; récepteur webhook | Calibration mesurée ; journal complet |
 | **4 — Lancement** | M+9 | Capital réduit, montée en charge progressive | Validation indépendante des modèles signée |
 
 ---
 
-## 9. Questions ouvertes (décisions attendues des fondateurs)
+### 8.1 Phase 1 en détail : actions US, budget données nul
 
-1. **Règle de flux « 30 jours consécutifs ».** Faut-il lire « flux net cumulé positif sur 30 jours » (défaut, `--flow-rule cumulative`) ou « chaque jour positif pendant 30 jours » (`consecutive`, beaucoup plus rare) ?
-2. **Définition des institutions de référence.** Faut-il une liste restreinte de fonds « Smart Money » (quels CIK ?), les 50 plus gros gérants, ou toutes les institutions ? Et faut-il mesurer la variation du nombre d'actions détenues (défaut) ou du pourcentage du flottant ?
-3. **Long-only ou long/short ?** La distribution confirmée pourrait ouvrir une position vendeuse (au prix d'une conformité plus lourde : réglementation européenne sur les ventes à découvert, coût d'emprunt).
-4. **Données disponibles et budget.** Avez-vous déjà Bloomberg ou LSEG, EPFR, WhaleWisdom, Glassnode ? Par quel univers commencer (ex. S&P 500 + ETF sectoriels, 2014–2025) ?
-5. **Paramètres de risque.** Valider les valeurs par défaut :
-   - stop critique à max(25 %, 0.75 × volatilité) ;
-   - coupe-circuit à −20 % de drawdown ;
-   - budget de risque de 2 % par ligne, 12 lignes maximum ;
-   - seuils de sortie à −3 % / −2 % / −10 %.
-6. **TradingView.** Quel abonnement (les webhooks requièrent un plan payant) ? Quels usages prioritaires ? Faut-il lancer le pilote du serveur MCP en phase 2 ?
-7. **Moteur.** Conserver le moteur maison, ou ajouter un export vers `vectorbt` ou `backtrader` pour comparaison ?
+| Brique | Source gratuite | État |
+|---|---|---|
+| Déclarations des gérants | Jeux « Form 13F Data Sets » de la SEC, 2014–2025 | Lecture point-in-time **livrée** (`load_13f_positions`) |
+| Liste Smart Money | Calculée à partir des 13F et des cours | **Livrée** (`smart_money.select_smart_money`) |
+| Mesure des achats | Indice de détention à composition constante (nombre d'actions) | **Livrée** (`smart_money.smart_money_holdings_index`) |
+| Jambe rapide | Proxy calculé sur les cours et volumes des ETF sectoriels (Chaikin Money Flow 30 jours), à la place d'EPFR | **Livré** (`smart_money.flows_from_ohlcv`) |
+| Correspondance CUSIP → ticker | API OpenFIGI (gratuite) | À construire |
+| Cours quotidiens (actions et ETF, titres radiés inclus) | Source publique gratuite | À construire |
+| Univers | Actions américaines détenues par la liste Smart Money, reconstituées chaque trimestre à partir des 13F : les titres radiés depuis restent dans l'historique, donc pas de biais du survivant | À construire |
+| Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | À construire |
+
+Les téléchargements (SEC, OpenFIGI, cours) ne peuvent pas partir de l'environnement de développement actuel : son accès réseau bloque ces sites. **Seule action requise des fondateurs** : autoriser ces domaines dans les réglages réseau de l'environnement, ou faire tourner l'étape de téléchargement sur un autre poste.
+
+**Limite assumée du budget nul.** Le proxy volume mesure la pression acheteuse sur le marché, pas les souscriptions et rachats réels des fonds. Si la phase 1 est concluante, l'achat d'un historique de flux réels (parts en circulation des ETF, puis EPFR) sera la première dépense recommandée.
+
+---
+
+## 9. Décisions
+
+### 9.1 Décisions des fondateurs (23/09/2026)
+
+| Sujet | Décision | Conséquence |
+|---|---|---|
+| Règle de flux « 30 jours » | Flux net **cumulé** positif sur 30 jours | Réglage par défaut du moteur (`flow_rule = cumulative`) |
+| Institutions de référence | **Liste Smart Money** (gérants choisis sur leur historique) | Sélection automatique point-in-time (§9.2) |
+| Sens des positions | **Acheteur uniquement** | Pas de vente à découvert ; conformité simplifiée |
+| Premier univers | **Actions US + ETF sectoriels** | Phase 1 (§8.1) |
+| Budget données | **Gratuit** | 13F de la SEC ; proxy volume pour les flux (§8.1) |
+| Profil de risque | **Équilibré** | Stop max(25 %, 0.75 × volatilité), coupe-circuit −20 %, 2 % de risque par ligne, 12 lignes maximum |
+| TradingView | **Plan gratuit**, sans serveur MCP | Visualisation uniquement ; alertes produites par le moteur (§4.3) |
+
+### 9.2 Décisions techniques de l'équipe
+
+| Sujet | Décision | Justification |
+|---|---|---|
+| Mesure des achats | **Nombre d'actions détenues**, à composition de liste constante | Insensible aux variations de prix ; un changement de liste n'est jamais confondu avec un achat |
+| Sélection Smart Money | Chaque trimestre, les **50 gérants** au meilleur ratio d'information sur **8 trimestres**, calculé sur leur rendement « copie conforme » en excès de la moyenne des gérants ; 20 à 1 500 lignes en portefeuille | Récompense la régularité plutôt qu'un coup de chance ; exclut les quasi-indiciels, dont les achats ne sont pas des convictions |
+| Flux à budget nul | Chaikin Money Flow 30 jours de l'ETF sectoriel ; achat si > 0, alerte de distribution si ≤ −0,05 | Seuils identiques à l'indicateur TradingView : ce que voit l'équipe correspond à ce que décide le moteur |
+| Moteur de backtest | **Moteur maison** conservé | Voir §5.1 |

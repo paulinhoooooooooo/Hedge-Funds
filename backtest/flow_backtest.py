@@ -29,7 +29,8 @@ Architecture (une section par étape)
 ------------------------------------
   1. Paramétrage   : SourceSpec (par classe d'actifs), StrategyConfig
   2. Données       : MarketData ; generate_synthetic_market() ; load_market_from_csv() ;
-                     export_market_to_csv() ; build_13f_holdings_from_sec() (jeux SEC DERA)
+                     export_market_to_csv() ; load_13f_positions() et
+                     build_13f_holdings_from_sec() (jeux SEC DERA)
   3. Point-in-time : build_pit_institutional_change() applique les délais de publication
   4. Signaux       : compute_signals() — vectorisé, sans état
   5. Moteur        : run_backtest() — boucle quotidienne avec état (positions, exécution
@@ -395,13 +396,13 @@ def _parse_sec_date(series: pd.Series) -> pd.Series:
     return parsed.fillna(fallback).astype("datetime64[ns]")
 
 
-def build_13f_holdings_from_sec(
+def load_13f_positions(
     dataset_dirs: Iterable[str | Path],
-    cusip_to_asset: Mapping[str, str],
+    cusip_to_asset: Optional[Mapping[str, str]] = None,
     reference_ciks: Optional[Iterable[str | int]] = None,
     statutory_lag_days: int = 45,
 ) -> pd.DataFrame:
-    """Agrège les « Form 13F Data Sets » de la SEC (DERA) en détention par actif et trimestre.
+    """Lit les « Form 13F Data Sets » de la SEC (DERA) : une ligne par gérant, actif et trimestre.
 
     Source : https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets
     (un répertoire décompressé par période ; les fichiers SUBMISSION.tsv et INFOTABLE.tsv
@@ -409,16 +410,17 @@ def build_13f_holdings_from_sec(
 
     Règles point-in-time :
       * seules les déclarations initiales « 13F-HR » sont retenues : les amendements
-        (13F-HR/A), déposés plus tard, réécriraient l'historique ;
+        (13F-HR/A), déposés plus tard, réécriraient l'historique ; si un gérant dépose deux
+        déclarations initiales pour un même trimestre, seule la première compte ;
       * seules les déclarations déposées au plus tard à l'échéance légale (fin de trimestre
-        + 45 jours) entrent dans l'agrégat du trimestre : un dépôt tardif n'était pas connu
-        du marché à cette date ;
+        + 45 jours) sont retenues : un dépôt tardif n'était pas connu du marché à cette date ;
       * seules les actions ordinaires (SSHPRNAMTTYPE = 'SH', hors options PUTCALL) comptent ;
-        on agrège le NOMBRE d'actions (SSHPRNAMT), insensible au changement d'unité du champ
+        on compte le NOMBRE d'actions (SSHPRNAMT), insensible au changement d'unité du champ
         VALUE (milliers de dollars avant 2023, dollars ensuite).
 
-    reference_ciks : liste des CIK des institutions « Smart Money » suivies (None = toutes).
-    Retourne un DataFrame asset, period_end, filing_date, value, n_filers.
+    cusip_to_asset : correspondance CUSIP -> code actif (None = on garde le CUSIP).
+    reference_ciks : CIK des institutions « Smart Money » suivies (None = toutes).
+    Retourne un DataFrame cik, asset, period_end, filing_date, shares.
     """
     subs, infos = [], []
     for directory in dataset_dirs:
@@ -429,29 +431,54 @@ def build_13f_holdings_from_sec(
     info = pd.concat(infos, ignore_index=True)
 
     sub = sub[sub["SUBMISSIONTYPE"].str.strip() == "13F-HR"].copy()
+    sub["CIK"] = sub["CIK"].astype(str).str.strip().astype(int).astype(str)
     if reference_ciks is not None:
-        ciks = {str(int(c)) for c in reference_ciks}
-        sub = sub[sub["CIK"].astype(str).str.strip().astype(int).astype(str).isin(ciks)]
+        sub = sub[sub["CIK"].isin({str(int(c)) for c in reference_ciks})]
     sub["FILING_DATE"] = _parse_sec_date(sub["FILING_DATE"])
     sub["PERIODOFREPORT"] = _parse_sec_date(sub["PERIODOFREPORT"])
     deadline = sub["PERIODOFREPORT"] + pd.Timedelta(days=statutory_lag_days)
     sub = sub[sub["FILING_DATE"] <= deadline]
+    sub = sub.sort_values("FILING_DATE").drop_duplicates(["CIK", "PERIODOFREPORT"], keep="first")
 
     info = info[info["SSHPRNAMTTYPE"].str.strip().str.upper() == "SH"]
     if "PUTCALL" in info.columns:
         info = info[info["PUTCALL"].isna() | (info["PUTCALL"].str.strip() == "")]
-    mapping = {k.strip().upper(): v for k, v in cusip_to_asset.items()}
-    info = info.assign(asset=info["CUSIP"].str.strip().str.upper().map(mapping)).dropna(subset=["asset"])
+    cusip = info["CUSIP"].str.strip().str.upper()
+    if cusip_to_asset is None:
+        info = info.assign(asset=cusip)
+    else:
+        mapping = {k.strip().upper(): v for k, v in cusip_to_asset.items()}
+        info = info.assign(asset=cusip.map(mapping)).dropna(subset=["asset"])
     info = info.assign(shares=pd.to_numeric(info["SSHPRNAMT"], errors="coerce"))
 
     merged = info.merge(sub[["ACCESSION_NUMBER", "CIK", "FILING_DATE", "PERIODOFREPORT"]], on="ACCESSION_NUMBER")
     out = (
-        merged.groupby(["asset", "PERIODOFREPORT"])
-        .agg(value=("shares", "sum"), filing_date=("FILING_DATE", "max"), n_filers=("CIK", "nunique"))
+        merged.groupby(["CIK", "asset", "PERIODOFREPORT"])
+        .agg(shares=("shares", "sum"), filing_date=("FILING_DATE", "max"))
         .reset_index()
-        .rename(columns={"PERIODOFREPORT": "period_end"})
+        .rename(columns={"CIK": "cik", "PERIODOFREPORT": "period_end"})
     )
-    out = out[out["value"] > 0]
+    return out[out["shares"] > 0][["cik", "asset", "period_end", "filing_date", "shares"]]
+
+
+def build_13f_holdings_from_sec(
+    dataset_dirs: Iterable[str | Path],
+    cusip_to_asset: Mapping[str, str],
+    reference_ciks: Optional[Iterable[str | int]] = None,
+    statutory_lag_days: int = 45,
+) -> pd.DataFrame:
+    """Détention agrégée par actif et trimestre (mêmes règles point-in-time que load_13f_positions).
+
+    Pour une liste Smart Money qui évolue dans le temps, utiliser plutôt
+    smart_money.smart_money_holdings_index(), qui mesure les variations à composition constante.
+    Retourne un DataFrame asset, period_end, filing_date, value, n_filers.
+    """
+    pos = load_13f_positions(dataset_dirs, cusip_to_asset, reference_ciks, statutory_lag_days)
+    out = (
+        pos.groupby(["asset", "period_end"])
+        .agg(value=("shares", "sum"), filing_date=("filing_date", "max"), n_filers=("cik", "nunique"))
+        .reset_index()
+    )
     return out[["asset", "period_end", "filing_date", "value", "n_filers"]].sort_values(["asset", "period_end"])
 
 
