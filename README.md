@@ -6,7 +6,7 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 
 | Livrable | Contenu |
 |---|---|
-| [`docs/SYNTHESE_MANAGERIALE.md`](docs/SYNTHESE_MANAGERIALE.md) | Synthèse managériale : validation de l'organisation, protocole d'évaluation continue et de sortie, architecture, TradingView, résultats, questions ouvertes |
+| [`docs/SYNTHESE_MANAGERIALE.md`](docs/SYNTHESE_MANAGERIALE.md) | Synthèse managériale : validation de l'organisation, protocole d'évaluation continue et de sortie, architecture, TradingView, résultats, décisions |
 | [`backtest/flow_backtest.py`](backtest/flow_backtest.py) | Moteur de backtest : délais de publication appliqués (13F, COT, flux), sortie à trois niveaux, exécution fractionnée, métriques de risque, Matrice prédictive |
 | [`backtest/smart_money.py`](backtest/smart_money.py) | Liste Smart Money point-in-time (gérants sélectionnés sur leurs 13F passés), indice de détention à composition constante, proxy de flux gratuit à partir des volumes |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
@@ -75,11 +75,13 @@ Pour les actions, `build_13f_holdings_from_sec()` agrège les « Form 13F Data S
 
 ## TradingView
 
-TradingView sert de couche visuelle et d'alerte ; il ne sert pas à générer les signaux (voir §4.3 de la synthèse).
+TradingView sert de couche visuelle ; il ne sert pas à générer les signaux (voir §4.3 de la synthèse).
+Avec le plan gratuit retenu, les étapes 1 à 3 suffisent : les alertes du fonds viennent du moteur
+(`revue_positions.csv`, section « ALERTES DISTRIBUTION » de la watchlist).
 1. **Watchlist** : importer `outputs/tradingview/watchlist_fonds.txt` dans TradingView.
 2. **Journal sur le graphique** : coller `outputs/tradingview/pine/<actif>.pine` dans l'éditeur Pine, puis l'ajouter au graphique du symbole indiqué en en-tête.
-3. **Smart Money Flow Monitor** : coller `tradingview/smart_money_flow_monitor.pine` dans l'éditeur Pine et renseigner le secret du webhook.
-4. **Alertes** : lancer le récepteur, puis le placer derrière un reverse proxy HTTPS (port 443) :
+3. **Smart Money Flow Monitor** : coller `tradingview/smart_money_flow_monitor.pine` dans l'éditeur Pine.
+4. **Alertes webhook (plan payant uniquement)** : renseigner le secret dans l'indicateur, lancer le récepteur, puis le placer derrière un reverse proxy HTTPS (port 443) :
    ```bash
    TV_WEBHOOK_SECRET="un-secret-long" python tradingview/webhook_receiver.py --port 8080
    ```
