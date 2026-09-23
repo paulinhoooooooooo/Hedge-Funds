@@ -401,3 +401,20 @@ def test_alpaca_daily_prices_in_tiingo_format(tmp_path, monkeypatch):
     assert list(df["splitFactor"]) == [1.0, 1.0, 2.0]  # division le 22/09
     factors = p1.split_factors(prices)["AAPL"]
     assert factors.iloc[-1] == 2.0 and factors.iloc[0] == 1.0
+
+
+def test_all_skips_alpaca_without_keys_and_defaults_to_250_symbols(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(p1, "DATA", tmp_path)
+    monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
+    calls = []
+    for name in ["stage_sec", "stage_figi", "stage_sectors", "stage_prices", "stage_finra", "stage_cot", "stage_ats",
+                 "stage_short", "stage_events", "stage_insiders", "stage_names", "stage_buyers"]:
+        monkeypatch.setattr(p1, name, lambda name=name: calls.append(name))
+    monkeypatch.setattr(p1, "stage_universe", lambda n: calls.append(("universe", n)))
+    monkeypatch.setattr(p1, "stage_alpaca", lambda: calls.append("stage_alpaca"))
+    monkeypatch.setattr(p1, "build_engine_files", lambda: calls.append("build") or {})
+    p1.main(["all"])
+    assert "stage_alpaca" not in calls and "stage_buyers" in calls  # la suite n'est pas interrompue
+    assert ("universe", 250) in calls
+    assert "ignorée" in capsys.readouterr().out

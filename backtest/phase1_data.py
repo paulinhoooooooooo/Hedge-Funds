@@ -1434,9 +1434,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
                                           "cot", "ats", "short", "events", "insiders", "alpaca", "build", "names",
                                           "buyers"])
-    parser.add_argument("--max-symbols", type=int, default=488,
-                        help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
+    parser.add_argument("--max-symbols", type=int, default=None,
+                        help="actions suivies au plus ; défaut : 488 avec les clés Alpaca, 250 sans elles "
+                             "(limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
+    if args.max_symbols is None:
+        args.max_symbols = 488 if alpaca_keys_present() else 250
     DATA.mkdir(parents=True, exist_ok=True)
     stages: dict[str, Callable[[], object]] = {
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
@@ -1450,6 +1453,10 @@ def main(argv: Optional[list[str]] = None) -> None:
         status()
     elif args.stage == "all":
         for name, fn in stages.items():
+            if name == "alpaca" and not alpaca_keys_present():
+                # Sans clés, l'étape s'arrêterait (sys.exit) et interromprait les étapes suivantes.
+                print("=== alpaca === ignorée : clés Alpaca absentes (radar heure par heure et gros blocs indisponibles)")
+                continue
             print(f"=== {name} ===")
             fn()
     else:
