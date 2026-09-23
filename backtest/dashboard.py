@@ -312,7 +312,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
     <div class="side">
       <section class="panel" aria-label="Radar des grands acteurs">
         <h2>Radar des grands acteurs</h2>
-        <p class="note">Volumes anormaux recoupés sur l'heure, le jour, la semaine et le mois.</p>
+        <p class="note">Volumes anormaux recoupés sur l'heure, le jour, la semaine et le mois, plus les bourses privées, les plateformes des banques, les positions vendeuses, les achats des dirigeants et les franchissements de 5 %.</p>
         {_radar_html(result)}
       </section>
       <section class="panel" aria-label="Banques">

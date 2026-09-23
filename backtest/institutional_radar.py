@@ -129,6 +129,7 @@ class Radar:
     evidence: dict[str, pd.DataFrame] = field(default_factory=dict)  # famille -> points [date x actif]
     notes: dict[str, Callable] = field(default_factory=dict)  # famille -> texte(actif, i)
     events: Optional[pd.DataFrame] = None  # jours d'événement (bool) [date x actif]
+    muted: Optional[pd.DataFrame] = None  # jours d'événement où le volume du jour aurait compté
 
     def alerts(self, date=None, threshold: float = ALERT_THRESHOLD) -> pd.DataFrame:
         """Alertes d'une séance (la dernière par défaut), les plus fortes d'abord."""
@@ -142,7 +143,7 @@ class Radar:
     def explain(self, asset: str, i: int) -> str:
         """Explication en français simple, unité de temps par unité de temps."""
         parts = []
-        if self.events is not None and bool(self.events[asset].iloc[i]):
+        if self.muted is not None and bool(self.muted[asset].iloc[i]):
             parts.append("Jour d'événement (résultats, échéance d'options ou rééquilibrage d'indices) : "
                          "le volume du jour est mécanique et n'est pas compté.")
         hour = self.hourly.get(asset)
@@ -542,10 +543,11 @@ def compute_radar(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, vo
         view = _window_view(high, low, close, volume, window, baseline, threshold,
                             allow_stealth=window > 1, offx_total=offx_total, offx_short=offx_short)
         if name == "jour":
+            muted = events & (view.state.fillna(0.0) != 0)
             view.state = view.state.mask(events, 0.0)
         views[name] = view
         score = score + weight * view.state.fillna(0.0)
-    radar = Radar(views=views, score=score, events=events)
+    radar = Radar(views=views, score=score, events=events, muted=muted)
     _evidence(radar, close, volume, extras)
     for points in radar.evidence.values():
         radar.score = radar.score + points.reindex_like(score).fillna(0.0)
