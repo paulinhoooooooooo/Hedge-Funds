@@ -193,6 +193,7 @@ class HttpError(RuntimeError):
     def __init__(self, status: int, url: str, body: str = ""):
         super().__init__(f"HTTP {status} sur {url} {body[:200]}")
         self.status = status
+        self.body = body
 
 
 @dataclass
@@ -561,6 +562,11 @@ def stage_prices_alpaca(http: Optional[Http] = None, start: str = ALPACA_HISTORY
         names = [ats_symbol(s) for s in chunk]
         pulls = {adj: alpaca_query(http, "bars", names, {"timeframe": "1Day", "adjustment": adj, "start": start})
                  for adj in ("all", "split", "raw")}
+        # La pagination multi-titres d'Alpaca omet parfois un titre (ex. DOW) : on le redemande seul.
+        for name in [n for n in names if not pulls["all"].get(n) and re.fullmatch(r"[A-Z][A-Z.]*", n)]:
+            for adj in pulls:
+                pulls[adj].update(alpaca_query(http, "bars", [name], {"timeframe": "1Day", "adjustment": adj,
+                                                                      "start": start}))
         for s, name in zip(chunk, names):
             if not pulls["all"].get(name):
                 absent.append(s)
@@ -1127,19 +1133,30 @@ def alpaca_http() -> Http:
 
 
 def alpaca_query(http: Http, kind: str, symbols: list[str], params: dict) -> dict[str, list[dict]]:
-    """Barres ou transactions de plusieurs titres, page par page (10 000 lignes au plus par page)."""
+    """Barres ou transactions de plusieurs titres, page par page (10 000 lignes au plus par page).
+    Un symbole refusé (« invalid symbol », ex. un code CUSIP resté sans symbole boursier) est retiré de
+    la liste au lieu de faire échouer tout le lot ; il est simplement absent du résultat."""
     out: dict[str, list[dict]] = {}
+    symbols = [s for s in symbols if re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", s) and not s[1:].isdigit()]
     token = None
-    while True:
+    while symbols:
         query = {"symbols": ",".join(symbols), "limit": 10000, "feed": "sip", **params}
         if token:
             query["page_token"] = token
-        page = json.loads(http.get(ALPACA_DATA.format(kind=kind), params=query))
+        try:
+            page = json.loads(http.get(ALPACA_DATA.format(kind=kind), params=query))
+        except HttpError as err:
+            bad = re.search(r"invalid symbol: ([^\"\s]+)", getattr(err, "body", "") or "")
+            if err.status != 400 or not bad or bad.group(1) not in symbols:
+                raise
+            symbols = [s for s in symbols if s != bad.group(1)]
+            continue
         for sym, rows in (page.get(kind) or {}).items():
             out.setdefault(sym, []).extend(rows)
         token = page.get("next_page_token")
         if not token:
             return out
+    return out
 
 
 def new_york_time(values) -> pd.Series:

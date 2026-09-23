@@ -410,3 +410,20 @@ def test_alpaca_keys_swapped_in_settings_are_reordered(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY_ID", "PK" + "Y" * 24)
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "t" * 44)
     assert p1.alpaca_credentials() == ("PK" + "Y" * 24, "t" * 44)
+
+
+def test_alpaca_drops_invalid_symbols_instead_of_failing_the_batch():
+    class Refuses:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params=None):
+            self.calls.append(params["symbols"])
+            if "ZZZ9" in params["symbols"]:
+                raise p1.HttpError(400, url, '{"message":"invalid symbol: ZZZ9"}')
+            return json.dumps({"bars": {"AAPL": [{"t": "2026-09-22T13:00:00Z"}]}, "next_page_token": None})
+
+    fake = Refuses()
+    raw = p1.alpaca_query(fake, "bars", ["AAPL", "9990302D", "ZZZ9"], {"timeframe": "1Day"})
+    assert list(raw) == ["AAPL"]
+    assert fake.calls == ["AAPL,ZZZ9", "AAPL"]  # code CUSIP écarté d'emblée, symbole refusé retiré
