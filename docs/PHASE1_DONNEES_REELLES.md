@@ -17,7 +17,8 @@ python backtest/phase1_data.py status    # SEC_CONTACT_EMAIL doit être « défi
 ```
 
 Domaines autorisés nécessaires : `www.sec.gov`, `data.sec.gov`, `api.openfigi.com`,
-`publicreporting.cftc.gov`, `api.tiingo.com`.
+`publicreporting.cftc.gov`, `api.tiingo.com`, `cdn.finra.org` (l'environnement est en accès
+réseau « Complet » : rien à ajouter).
 
 ## 1. Étapes, dans l'ordre
 
@@ -28,8 +29,11 @@ Domaines autorisés nécessaires : `www.sec.gov`, `data.sec.gov`, `api.openfigi.
 | Symboles boursiers | `python backtest/phase1_data.py figi` | ≈ 1 min par 250 titres | part des CUSIP reconnus (> 85 % attendu) |
 | Secteurs | `python backtest/phase1_data.py sectors` | < 5 min | titres sans code SIC (rattachés à SPY) |
 | Cours Tiingo | `nohup python backtest/phase1_data.py prices > data/phase1/prices.log 2>&1 &` | **≈ 75 s par symbole** (50/heure) : ≈ 5 h pour 250 titres | `tail data/phase1/prices.log` ; reprise automatique si relancé |
+| Hors bourse (FINRA) | `python backtest/phase1_data.py finra` | 20 à 40 min (depuis août 2018) | un fichier par mois dans `data/phase1/finra/` |
 | Banques (CFTC) | `python backtest/phase1_data.py cot` | < 1 min | position des banques vs leur habitude |
-| Fichiers du moteur | `python backtest/phase1_data.py build` | quelques minutes | `data/phase1/engine/resume.json` |
+| Fichiers du moteur | `python backtest/phase1_data.py build` | quelques minutes | `data/phase1/engine/resume.json` (`hors_bourse: true`) |
+| Noms des gérants | `python backtest/phase1_data.py names` | < 5 min | gérants identifiés |
+| Acheteurs et vendeurs | `python backtest/phase1_data.py buyers` | < 1 min | `data/phase1/engine/smart_money_buyers.csv` |
 
 Premier passage conseillé : **250 titres** (`--max-symbols 250`), pour obtenir un résultat en une
 demi-journée. L'univers pourra être élargi à 488 le mois suivant (limite Tiingo gratuite : 500
@@ -50,6 +54,18 @@ Les seuils de flux `0` / `-0.05` sont ceux du proxy gratuit (Chaikin Money Flow 
 sectoriels, §9.2 de la synthèse). Le serveur MCP du fonds peut ensuite répondre sur ces données :
 `FLOWFUND_DATA_DIR=data/phase1/engine`.
 
+## 2 bis. Page « Desk Smart Money » (ce que les fondateurs regardent)
+
+```bash
+python backtest/dashboard.py --data-dir data/phase1/engine --out outputs/desk_smart_money.html
+```
+
+Publier ce fichier comme page web privée (outil Artifact) en **remplaçant la démonstration au
+même lien** : `https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9` (paramètre `url`), puis donner
+le lien aux fondateurs.
+Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de vendeurs parmi les
+50 meilleurs gérants, les noms des principaux acheteurs, le radar et la position des banques.
+
 ## 3. Ce qu'il faut rapporter aux fondateurs (en langage simple)
 
 1. Performance et risque par rapport au S&P 500 (SPY) sur la même période : rendement annuel,
@@ -64,3 +80,5 @@ sectoriels, §9.2 de la synthèse). Le serveur MCP du fonds peut ensuite répond
    - une seule période historique : aucun résultat n'est une promesse.
 5. La position actuelle des banques sur les contrats S&P 500 et Nasdaq-100 (étape `cot`), comparée
    à leur habitude.
+6. Les dernières alertes du radar des grands acteurs (heure, jour, semaine, mois).
+7. Le lien de la page « Desk Smart Money ».

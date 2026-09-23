@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Rédigé par** | Direction de la Technologie (CTO) et Direction des Investissements (CIO) |
-| **Version** | v1.2 — 23/09/2026 — décisions des fondateurs (§9) ; troisième jambe « empreinte des grands acteurs » (§1.3) ; serveur MCP du fonds (§4.4) |
-| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/market_footprint.py` (empreinte prix / volume), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `mcp_server/` (serveur MCP du fonds), `tests/` (37 tests) |
+| **Version** | v1.3 — 23/09/2026 — décisions des fondateurs (§9) ; empreinte des grands acteurs (§1.3) ; radar heure / jour / semaine / mois (§1.4) ; serveur MCP (§4.4) ; fiches de trade et « Desk Smart Money » (§4.5) |
+| **Livrables associés** | `backtest/flow_backtest.py` (moteur de backtest), `backtest/smart_money.py` (liste Smart Money, flux à budget nul), `backtest/market_footprint.py` (empreinte prix / volume), `backtest/institutional_radar.py` (radar des grands acteurs), `backtest/trade_cards.py` (fiches de trade), `backtest/dashboard.py` (page « Desk Smart Money »), `backtest/phase1_data.py` (données réelles gratuites), `backtest/tradingview_bridge.py`, `tradingview/` (intégration TradingView), `mcp_server/` (serveur MCP du fonds), `tests/` (57 tests) |
 
 ---
 
@@ -84,6 +84,32 @@ On vend par paliers quand ces sources se retournent : une seule en alerte, on al
 - Le prix et le volume montrent la *pression* des grands acteurs, pas leur *identité*.
 - Une grande partie du volume des banques est de la tenue de marché couverte : ce n'est pas un pari.
 - Les méthodes populaires qui prétendent lire les ordres des banques sur un graphique (« order blocks », « liquidity grabs ») n'ont pas de validation sérieuse. Le fonds n'utilise que des mesures objectives, calculables et testées sans biais d'anticipation.
+
+### 1.4 Le radar des grands acteurs : heure, jour, semaine, mois
+
+**Demande des fondateurs : repérer presque en direct qu'une institution achète ou vend** (« un mouvement bizarre sur l'action, un volume très fort d'un coup, des achats importants »), **sur plusieurs unités de temps.**
+
+Les données de Bourse sont anonymes : personne ne voit *qui* achète. Le radar cherche donc des **traces**, puis les recoupe d'une unité de temps à l'autre.
+
+| Unité de temps | Comparée à | Ce que le radar cherche |
+|---|---|---|
+| **Heure** | la même heure des 20 séances précédentes (l'ouverture est toujours plus active) | un volume au moins 3 fois la normale, clôture de l'heure dans le haut ou le bas de sa fourchette |
+| **Jour** | les 120 séances précédentes | un volume au moins 2,5 fois la normale avec une pression nette (Chaikin Money Flow ≥ 0,15 en valeur absolue) |
+| **Semaine** (5 séances) | les 26 semaines précédentes | un volume au moins 1,8 fois la normale ; ou une **accumulation discrète** : volume élevé sans mouvement de prix, quelqu'un absorbe les ventes |
+| **Mois** (21 séances) | les 12 mois précédents | un volume au moins 1,4 fois la normale ; ou une accumulation discrète |
+
+**Confirmations hors bourse (données FINRA gratuites, publiées le soir, utilisées le lendemain) :** la part du volume passée par les bourses privées et la part de ventes à découvert hors bourse. Une vente à découvert hors bourse élevée signale souvent des intermédiaires qui servent un gros acheteur.
+
+**Score** : heure 0,5 ; jour 1 ; semaine 1,5 ; mois 2. **Alerte à partir de ±2,5**, c'est-à-dire au moins deux unités de temps concordantes. Dans le moteur :
+- une alerte de distribution interdit d'acheter ;
+- une alerte d'accumulation fait passer le candidat devant les autres.
+
+**Décision des fondateurs : niveau gratuit, chaque soir** (alerte le lendemain matin). Le niveau payant — lecture de toutes les transactions pendant la séance (gros blocs, achats répétés au même prix, balayages de plusieurs bourses, options inhabituelles) — reste possible plus tard. L'heure n'est disponible gratuitement que sur la bourse IEX (2 à 3 % des échanges) : elle compte donc peu.
+
+**Limites.**
+- Les résultats d'entreprise, les échéances d'options et les rééquilibrages d'indices créent aussi des volumes anormaux.
+- La part hors bourse inclut les ordres des particuliers, que les courtiers exécutent eux-mêmes.
+- Dans le marché simulé, 6 mois après une alerte d'achat, l'action a monté 58 fois sur 100 (+3,8 % en moyenne) : un avantage faible, comme on peut s'y attendre d'un signal de court terme.
 
 ---
 
@@ -205,7 +231,7 @@ Chaque prédiction est accompagnée d'une note en quatre blocs, pré-rédigée p
   - aucun levier.
 - **Stops de prix bien séparés.** Le stop critique ne sert pas à timer le marché : c'est une assurance du Risk Manager, **ajustée à la volatilité**. Un seuil fixe de 25 % se déclenchait sur le seul bruit des crypto-monnaies (18 sorties sur 22 en crypto lors d'un premier calibrage).
 
-**Résultat sur le backtest de démonstration :** 104 des 117 sorties sont des « distributions confirmées » (niveau 2), et 13 sont des stops de risque (niveau 3). La détention médiane est de 309 jours, cohérente avec l'horizon moyen/long terme visé.
+**Résultat sur le backtest de démonstration :** 100 des 111 sorties sont des « distributions confirmées » (niveau 2), et 11 sont des stops de risque (niveau 3). La détention médiane est de 349 jours, cohérente avec l'horizon moyen/long terme visé.
 
 ### 3.5 Circuit de décision (qui fait quoi)
 
@@ -337,6 +363,30 @@ Ses données viennent des sources officielles et gratuites (SEC, CFTC, FINRA, co
 
 ---
 
+### 4.5 Les fiches de trade et le « Desk Smart Money »
+
+**Demande des fondateurs : ouvrir le fonds et voir les décisions récentes, chacune expliquée** (« achat sur AAPL parce que plusieurs grosses institutions accumulent, ce qui a historiquement donné tel résultat »).
+
+Chaque décision produit une **fiche** qui répond à quatre questions :
+
+| Question | Contenu |
+|---|---|
+| **Quoi** | l'action, la date, la décision (achat, renforcement, allègement, vente) |
+| **Pourquoi** | le déclencheur, puis chaque source : gérants de référence (avec, sur données réelles, le nombre d'acheteurs et de vendeurs et les noms des principaux acheteurs), argent des fonds, empreinte des grands acteurs, radar, banques |
+| **Historique** | ce que ce même signal a donné par le passé, sur les actifs du même type, à 3 et 6 mois — **en n'utilisant que les issues connues à la date de la décision** |
+| **Aujourd'hui** | la position est-elle encore détenue, et avec quel résultat |
+
+La page **« Desk Smart Money »** (`backtest/dashboard.py`) réunit :
+- l'état du fonds et sa courbe face au marché ;
+- les fiches, filtrables (achats, allègements, ventes) ;
+- le radar ;
+- la position des banques ;
+- le portefeuille.
+
+Elle se publie comme page web privée, lisible sur téléphone. Les mêmes fiches sont disponibles dans Claude grâce aux outils MCP `derniers_trades` et `radar_grands_acteurs`.
+
+**Le fonds ne passe aucun ordre réel** : il montre ce qu'il ferait, et pourquoi.
+
 ## 5. Protocole de backtest
 
 ### 5.1 Choix du moteur
@@ -379,32 +429,32 @@ Démonstration (graine 7, 2012–2025, 24 actifs : 12 actions, 4 devises, 4 mati
 
 | Métrique | Stratégie (nette de coûts) | Univers équipondéré (sans coûts) |
 |---|---|---|
-| CAGR | +11.5 % | +5.3 % |
-| Volatilité | 8.7 % | 12.4 % |
-| **Sharpe** | **1.07** | 0.32 |
-| **Sortino** | **1.56** | 0.45 |
-| **Max Drawdown** | **−18.3 %** | −22.7 % |
-| **Recovery Time** (creux → plus-haut) | 412 jours | non récupéré |
-| Allers-retours / taux de réussite | 117 / 62 % | — |
-| Détention médiane | 309 jours | — |
-| Turnover annuel / coûts cumulés | 2.6× / 7.1 % du capital | — |
+| CAGR | +10.3 % | +5.3 % |
+| Volatilité | 8.6 % | 12.4 % |
+| **Sharpe** | **0.96** | 0.32 |
+| **Sortino** | **1.37** | 0.45 |
+| **Max Drawdown** | **−18.2 %** | −22.7 % |
+| **Recovery Time** (creux → plus-haut) | 845 jours | non récupéré |
+| Allers-retours / taux de réussite | 111 / 59 % | — |
+| Détention médiane | 349 jours | — |
+| Turnover annuel / coûts cumulés | 2.7× / 6.6 % du capital | — |
 
 Robustesse sur 8 mondes synthétiques indépendants (`--multi-seed 8`) :
-- Sharpe moyen de **1.16** (de 0.87 à 1.61), contre 0.61 pour l'univers ;
-- Max Drawdown de −8 % à −22 % (−14 % en moyenne).
+- Sharpe moyen de **1.17** (de 0.91 à 1.58), contre 0.61 pour l'univers ;
+- Max Drawdown de −8 % à −18 % (−13 % en moyenne).
 
 **Apport de la troisième jambe** (moyenne des 8 mondes) :
 
 | | Sans empreinte | Avec empreinte |
 |---|---|---|
-| Sharpe | 1.02 | **1.16** |
-| Rendement annuel | +11.7 % | **+12.5 %** |
-| Pire perte moyenne | −15.0 % | **−14.1 %** |
-| Détention médiane / turnover | 508 j / 1.7× | 293 j / 2.7× |
+| Sharpe | 1.00 | **1.17** |
+| Rendement annuel | +11.4 % | **+12.5 %** |
+| Pire perte moyenne | −14.9 % | **−13.3 %** |
+| Détention médiane / turnover | 512 j / 1.6× | 309 j / 2.7× |
 
 Le monde synthétique contient cette empreinte **par construction**. Ces chiffres montrent que la jambe fonctionne comme prévu, pas qu'elle rapportera autant en réel. Un premier calibrage, où un « jour de distribution » exigeait seulement un volume supérieur à la veille, se déclenchait sur le bruit : 165 allers-retours et une détention médiane de 6 mois. D'où la règle durcie à 1,2 × le volume moyen.
 
-**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.16, **sans écart systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
+**Contrôle du biais d'anticipation** (la même stratégie, en ignorant les délais) : le Sharpe moyen est de 1.12, contre 1.17 avec les vrais délais : **pas d'avantage fictif systématique** dans ce monde synthétique. Le générateur ne modélise pas la corrélation, forte en réalité, entre achats institutionnels et rendements du trimestre en cours. Sur données réelles, ce contrôle reste dans le rapport ; **la garantie d'absence de biais vient du test de perturbation**, pas de cette comparaison.
 
 ![Backtest synthétique](img/backtest_synthetique.png)
 
@@ -470,6 +520,8 @@ Le monde synthétique contient cette empreinte **par construction**. Ces chiffre
 | Secteur de chaque action → ETF sectoriel | Code d'activité (SIC) publié par la SEC | **Livré** (`phase1_data.py sectors`) |
 | Empreinte des grands acteurs | Calculée à partir des cours, plus hauts, plus bas et volumes | **Livrée** (`market_footprint.py`) |
 | Banques sur les contrats à terme | Rapport COT de la CFTC, catégorie « Dealer / Intermediary » (E-mini S&P 500 et Nasdaq-100, depuis 2006) | **Livré et testé sur données réelles** (`phase1_data.py cot`) |
+| Échanges hors bourse, titre par titre | Fichiers FINRA « Reg SHO » quotidiens (depuis août 2018) | **Livré, testé sur un vrai fichier** (`phase1_data.py finra`) |
+| Noms des gérants, acheteurs et vendeurs par trimestre | SEC (fiche de chaque gérant) + 13F | **Livré** (`phase1_data.py names`, `buyers`) |
 | Volumes des dark pools, titre par titre | Données « ATS » publiées par la FINRA | À construire |
 
 L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fondateurs, dans les réglages de l'environnement : l'adresse de contact dédiée exigée par la SEC (`SEC_CONTACT_EMAIL`) et la clé du compte Tiingo gratuit. La marche à suivre complète est dans `docs/PHASE1_DONNEES_REELLES.md`.
@@ -492,6 +544,8 @@ L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fon
 | Profil de risque | **Équilibré** | Stop max(25 %, 0.75 × volatilité), coupe-circuit −20 %, 2 % de risque par ligne, 12 lignes maximum |
 | TradingView | **Plan gratuit**, sans serveur MCP | Visualisation uniquement ; alertes produites par le moteur (§4.3) |
 | Suivre les banques | **Oui, à travers le prix et le volume** | Troisième jambe « empreinte des grands acteurs » (§1.3) |
+| Détection des gros acheteurs | **Gratuit, chaque soir**, sur l'heure, le jour, la semaine et le mois | Radar des grands acteurs (§1.4) ; le direct payant reste possible plus tard |
+| Fiches de trade et écran | **Oui** | Fiches et page « Desk Smart Money » (§4.5) |
 
 ### 9.2 Décisions techniques de l'équipe
 
@@ -504,3 +558,5 @@ L'accès réseau est ouvert depuis le 23/09/2026. Restent à fournir par les fon
 | Empreinte des grands acteurs | Profil de volume 6 mois (zone de valeur 70 %), VWAP 63 séances, ratio hausses / baisses 50 séances (accumulation ≥ 1,15 ; distribution ≤ 0,85 sous la zone de valeur), jours de distribution (baisse ≥ 0,2 % sur volume ≥ 1,2 × la moyenne ; alerte à 5 sur 25 séances) | Horizons alignés sur le fonds (trimestre, semestre) ; seuils classiques, durcis là où le bruit les déclenchait |
 | Règle de sortie | **Deux jambes sur trois** pour une sortie totale, une seule pour un allègement | Aucune source seule ne fait vendre toute la ligne ; la jambe lente (13F) n'est plus indispensable pour sortir |
 | MCP et TradingView | **Pas de serveur branché sur le compte TradingView** ; serveur MCP du fonds, en lecture seule | Conditions d'utilisation, licences des Bourses, sécurité (§4.4) |
+| Radar | Seuils de volume : heure ×3, jour ×2,5, semaine ×1,8, mois ×1,4 ; pression ≥ 0,15 ; poids 0,5 / 1 / 1,5 / 2 ; alerte à ±2,5 | Deux unités de temps concordantes au minimum : un pic isolé est trop souvent du bruit (résultats, échéances) |
+| Historique des fiches | Épisodes de signal (premier jour après 20 séances sans signal), issues à 3 et 6 mois connues à la date | Une même accumulation n'est comptée qu'une fois ; aucun regard vers le futur |

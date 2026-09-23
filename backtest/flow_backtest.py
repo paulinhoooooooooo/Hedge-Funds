@@ -68,6 +68,7 @@ from typing import Iterable, Mapping, Optional
 import numpy as np
 import pandas as pd
 
+from institutional_radar import ALERT_THRESHOLD, Radar, compute_radar
 from market_footprint import Footprint, compute_footprint, describe_footprint
 
 
@@ -122,6 +123,8 @@ class StrategyConfig:
 
     # --- Troisième jambe : empreinte de marché des grands acteurs (prix / volume, market_footprint.py)
     use_footprint: bool = True  # actif dès que les données contiennent plus haut, plus bas et volume
+    # --- Radar des grands acteurs (heure, jour, semaine, mois ; institutional_radar.py)
+    use_radar: bool = True  # classe les candidats ; interdit d'acheter pendant une distribution détectée
 
     # --- Gestion des positions
     min_holding_days: int = 15  # horizon minimal : pas de sortie « flux » avant 15 jours
@@ -195,6 +198,8 @@ class MarketData:
     aum      : DataFrame [date x véhicule]  encours du véhicule (devise)
     assets   : DataFrame index=actif        colonnes asset_class, flow_vehicle
     high, low, volume : DataFrame [date x actif], optionnels — nécessaires à l'empreinte de marché
+    offexchange, offexchange_short : DataFrame [date x actif], optionnels — volume échangé hors
+               bourse et volume vendu à découvert hors bourse (fichiers FINRA « Reg SHO »)
     """
 
     prices: pd.DataFrame
@@ -205,6 +210,8 @@ class MarketData:
     high: Optional[pd.DataFrame] = None
     low: Optional[pd.DataFrame] = None
     volume: Optional[pd.DataFrame] = None
+    offexchange: Optional[pd.DataFrame] = None
+    offexchange_short: Optional[pd.DataFrame] = None
 
     @property
     def has_ohlcv(self) -> bool:
@@ -365,16 +372,37 @@ def generate_synthetic_market(start: str = "2012-01-02", end: str = "2025-06-30"
     tilt = 1.0 + 0.15 * reg * np.sign(returns)
     volume = (1e6 * np.exp(0.35 * rng_v.standard_normal((n_t, n_a)))
               * (1.0 + 0.5 * np.abs(returns) / sigma_d) * tilt)
+    # Programmes d'achat / de vente des institutions : 3 à 5 séances de très fort volume, plus
+    # fréquents en accumulation ou en distribution, et quelques-uns sans lien avec le régime
+    # (résultats, échéances d'options) pour produire de fausses alertes.
+    program = np.zeros((n_t, n_a))
+    start_prob = np.where(reg != 0, 0.012, 0.003)
+    starts = rng_v.random((n_t, n_a)) < start_prob
+    for t0, j in zip(*np.nonzero(starts)):
+        side = reg[t0, j] if reg[t0, j] != 0 else rng_v.choice([-1.0, 1.0])
+        length = int(rng_v.integers(3, 6))
+        program[t0:t0 + length, j] = side
+    volume = volume * np.where(program != 0, rng_v.uniform(2.5, 4.0, (n_t, n_a)), 1.0)
     close = prices.to_numpy()
     open_ = np.vstack([close[:1], close[:-1]])
-    upper = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * (1.0 - 0.25 * reg)
-    lower = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * (1.0 + 0.25 * reg)
+    tilt_wick = np.clip(reg + 2.0 * program, -3.0, 3.0)
+    upper = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * np.clip(1.0 - 0.25 * tilt_wick, 0.1, None)
+    lower = sigma_d * 0.4 * np.abs(rng_v.standard_normal((n_t, n_a))) * np.clip(1.0 + 0.25 * tilt_wick, 0.1, None)
     high = pd.DataFrame(np.maximum(open_, close) * (1.0 + upper), index=cal, columns=names)
     low = pd.DataFrame(np.minimum(open_, close) * (1.0 - lower), index=cal, columns=names)
     volume = pd.DataFrame(volume, index=cal, columns=names)
 
+    # Hors bourse (actions uniquement, comme les fichiers FINRA) : les institutions passent davantage
+    # par les bourses privées pendant l'accumulation ; les intermédiaires qui les servent vendent à découvert.
+    equity = np.array([assets.at[a, "asset_class"] == "EQUITY" for a in names])
+    share = np.clip(0.38 + 0.04 * reg + 0.05 * rng_v.standard_normal((n_t, n_a)), 0.05, 0.9)
+    short = np.clip(0.46 + 0.04 * reg + 0.05 * rng_v.standard_normal((n_t, n_a)), 0.05, 0.95)
+    offexchange = pd.DataFrame(np.where(equity, volume.to_numpy() * share, np.nan), index=cal, columns=names)
+    offexchange_short = offexchange * short
+
     return MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets,
-                      high=high, low=low, volume=volume)
+                      high=high, low=low, volume=volume, offexchange=offexchange,
+                      offexchange_short=offexchange_short)
 
 
 def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
@@ -388,6 +416,12 @@ def export_market_to_csv(data: MarketData, out_dir: str | Path) -> None:
             extra = frame.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset", value_name=name)
             px = px.merge(extra, on=["date", "asset"], how="left")
     px.dropna(subset=["close"]).to_csv(out / "prices.csv", index=False)
+    if data.offexchange is not None:
+        ox = data.offexchange.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset",
+                                                                      value_name="total_volume")
+        sx = data.offexchange_short.rename_axis("date").reset_index().melt(id_vars="date", var_name="asset",
+                                                                            value_name="short_volume")
+        ox.merge(sx, on=["date", "asset"]).dropna(subset=["total_volume"]).to_csv(out / "offexchange.csv", index=False)
     fl = data.flows.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="net_flow")
     au = data.aum.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="aum")
     fl.merge(au, on=["date", "vehicle"]).dropna(subset=["net_flow"]).to_csv(out / "flows.csv", index=False)
@@ -405,6 +439,7 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
                                  cf. build_13f_holdings_from_sec) ;
                    - FX / MP   : positions longues des Asset Managers / Managed Money (COT) ;
                    - crypto    : offre des Long-Term Holders ou solde des wallets institutionnels.
+    offexchange.csv (optionnel) : date, asset, total_volume, short_volume (FINRA « Reg SHO »)
     flows.csv    : date, vehicle, net_flow, aum
                    - ETF : net_flow = variation des parts en circulation x VL ; aum = encours ;
                    - EPFR : flux nets et encours des fonds du segment ;
@@ -426,7 +461,13 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
     holdings = pd.read_csv(d / "holdings.csv")
     holdings["period_end"] = _as_ns(holdings["period_end"])
     holdings["filing_date"] = _as_ns(holdings["filing_date"])
-    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv)
+    offx = {}
+    if (d / "offexchange.csv").exists():
+        ox = pd.read_csv(d / "offexchange.csv")
+        ox["date"] = _as_ns(ox["date"])
+        offx = {"offexchange": ox.pivot_table(index="date", columns="asset", values="total_volume", aggfunc="sum"),
+                "offexchange_short": ox.pivot_table(index="date", columns="asset", values="short_volume", aggfunc="sum")}
+    data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv, **offx)
     data.validate()
     return data
 
@@ -641,6 +682,7 @@ class Signals:
     dist_foot: pd.DataFrame  # empreinte de marché vendeuse (prix / volume)
     score: pd.DataFrame  # intensité du signal (classement des candidats)
     footprint: Optional[Footprint] = None
+    radar: Optional[Radar] = None
 
 
 def _window_min_periods(window: str) -> int:
@@ -701,23 +743,34 @@ def compute_signals(data: MarketData, cfg: StrategyConfig) -> Signals:
     # Troisième jambe : empreinte prix / volume des grands acteurs. Elle interdit d'acheter
     # pendant une distribution visible, renforce le classement des candidats en accumulation
     # et compte comme une jambe à part entière dans l'échelle de sortie.
+    def aligned(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.reindex(columns=names).copy()
+        out.index = _as_ns(out.index)
+        return out.reindex(cal)
+
     footprint = None
     dist_foot = pd.DataFrame(False, index=cal, columns=names)
     if cfg.use_footprint and data.has_ohlcv:
-        def aligned(frame: pd.DataFrame) -> pd.DataFrame:
-            out = frame.reindex(columns=names).copy()
-            out.index = _as_ns(out.index)
-            return out.reindex(cal)
         footprint = compute_footprint(aligned(data.high), aligned(data.low), raw, aligned(data.volume))
         dist_foot = footprint.distribution
         entry = entry & ~dist_foot
         score = score + 0.02 * footprint.accumulation
+
+    # Radar des grands acteurs : gros volumes anormaux recoupés sur plusieurs unités de temps.
+    radar = None
+    if cfg.use_radar and data.has_ohlcv:
+        offx = aligned(data.offexchange) if data.offexchange is not None else None
+        offx_short = aligned(data.offexchange_short) if data.offexchange_short is not None else None
+        radar = compute_radar(aligned(data.high), aligned(data.low), raw, aligned(data.volume), offx, offx_short)
+        entry = entry & ~(radar.score <= -ALERT_THRESHOLD)
+        score = score + 0.01 * radar.score
 
     return Signals(
         calendar=cal, prices=prices, price_valid=price_valid, returns=returns, vol=vol,
         io_change=io_change, io_period_end=io_pe, flow_ratio=flow_ratio,
         flow_ratio_short=flow_ratio_short, entry=entry, dist_slow=dist_slow,
         dist_fast=dist_fast, dist_hard=dist_hard, dist_foot=dist_foot, score=score, footprint=footprint,
+        radar=radar,
     )
 
 
@@ -1237,6 +1290,10 @@ def review_positions(result: BacktestResult, date=None, include_all: bool = Fals
                 parts.append(f"Prix ({_pct(price_ret)} sur 30 j) et flux alignés.")
         if sig.footprint is not None:
             parts.append(describe_footprint(sig.footprint, sig.prices.iat[i_t, j], i_t, j))
+        if sig.radar is not None:
+            radar_text = sig.radar.explain(a, i_t)
+            if radar_text != "Aucune trace anormale.":
+                parts.append("Radar des grands acteurs — " + radar_text)
         probas = [f"{lbl} {stats[(a, lbl)][0]:.0%} (base {stats[(a, lbl)][2]:.0%})"
                   for lbl, *_ in REVIEW_HORIZONS if (a, lbl) in stats]
         if probas:
