@@ -709,6 +709,7 @@ def adjust_shares_for_splits(positions: pd.DataFrame, factors: dict[str, pd.Seri
     """Exprime les actions déclarées en unités d'avant division : une division 2 pour 1 entre deux
     déclarations ne doit pas passer pour un doublement des achats."""
     adj = positions.copy()
+    adj["shares"] = adj["shares"].astype(float)  # une division donne des fractions d'action
     for asset, grp in adj.groupby("asset"):
         f = factors.get(asset)
         if f is None or f.empty:
