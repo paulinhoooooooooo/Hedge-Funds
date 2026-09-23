@@ -46,6 +46,13 @@ REGIME_GROSS = 0.5
 MAX_PE = 60.0
 PROXY_THRESHOLDS = {"entry_flow_threshold": 0.0, "exit_flow_threshold": -0.05}  # proxy prix / volume
 REAL_FLOW_THRESHOLDS = {"entry_flow_threshold": 0.0, "exit_flow_threshold": -0.02}  # vrais flux
+MARKET = "SPY"
+
+
+def small_book(n: int) -> fb.StrategyConfig:
+    """Fonds réduit à n actions : une part égale par ligne détenue (sinon le fonds, prévu pour 12
+    lignes, laisserait presque tout en trésorerie)."""
+    return fb.StrategyConfig(**PROXY_THRESHOLDS, max_positions=n, sizing="equal", max_weight=1.0 / n + 1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -246,8 +253,15 @@ def run_variants(data: fb.MarketData, engine_dir: Path, base_cfg: Optional[fb.St
     bm = fb.compute_metrics(bench, base_cfg.risk_free_rate)
     rows = [{"variante": "Référence : acheter et garder les mêmes actions", "rendement annuel": bm["cagr"],
              "Sharpe": bm["sharpe"], "pire perte": bm["max_drawdown"], "achats": len(data.assets),
-             "gagnants": np.nan, "exposition moyenne": 1.0},
-            summarize(baseline, "Programme actuel", start)]
+             "gagnants": np.nan, "exposition moyenne": 1.0}]
+    spy = engine_dir.parent / "prices" / f"{MARKET}.csv"
+    if spy.exists():
+        s_px = pd.read_csv(spy, parse_dates=["date"]).set_index("date")["adjClose"]
+        s_px = s_px[(s_px.index >= start) & (s_px.index <= sig.calendar[-1])]
+        sm = fb.compute_metrics(s_px / s_px.iloc[0] * base_cfg.initial_capital, base_cfg.risk_free_rate)
+        rows.append({"variante": "Référence : S&P 500 (SPY)", "rendement annuel": sm["cagr"], "Sharpe": sm["sharpe"],
+                     "pire perte": sm["max_drawdown"], "achats": 1, "gagnants": np.nan, "exposition moyenne": 1.0})
+    rows.append(summarize(baseline, "Programme actuel", start))
     cal_sig, table = apply_calibration(sig)
     details["calibrage"] = table
     rows.append(run("1 · Calibrage des indices", data, base_cfg, cal_sig))
@@ -277,8 +291,23 @@ def format_table(df: pd.DataFrame) -> str:
             continue
         wins = f"{r['gagnants']:.0%}" if np.isfinite(r["gagnants"]) else "—"
         lines.append(f"| {r['variante']} | {r['rendement annuel']:+.1%} | {r['Sharpe']:.2f} | {r['pire perte']:.1%} | "
-                     f"{r['achats']} | {wins} | {r['exposition moyenne']:.0%} |")
+                     f"{int(r['achats'])} | {wins} | {r['exposition moyenne']:.0%} |")
     return "\n".join(lines)
+
+
+def draw_summary(tables: list[pd.DataFrame]) -> pd.DataFrame:
+    """Plusieurs tirages : moyenne par variante et part des tirages où elle bat le programme actuel."""
+    rows = []
+    for label in tables[0]["variante"]:
+        vals = [t.set_index("variante").loc[label] for t in tables]
+        if "note" in vals[0] and isinstance(vals[0].get("note"), str):
+            continue
+        base = [t.set_index("variante").loc["Programme actuel"] for t in tables]
+        rows.append({"variante": label, "rendement annuel": np.mean([v["rendement annuel"] for v in vals]),
+                     "Sharpe": np.nanmean([v["Sharpe"] for v in vals]),
+                     "pire perte": np.mean([v["pire perte"] for v in vals]),
+                     "bat le programme": np.mean([v["Sharpe"] > b["Sharpe"] + 1e-9 for v, b in zip(vals, base)])})
+    return pd.DataFrame(rows)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -286,30 +315,45 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--n-actions", type=int, default=3, help="actions tirées au hasard (0 = tout l'univers)")
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--draws", type=int, default=1, help="nombre de tirages au hasard")
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
     engine_dir = Path(args.data_dir)
-    data = fb.load_market_from_csv(engine_dir)
-    equities = [a for a in data.assets.index if data.assets.at[a, "asset_class"] == "EQUITY"]
-    if args.n_actions:
-        rng = np.random.default_rng(args.seed)
-        chosen = sorted(rng.choice(equities, size=args.n_actions, replace=False).tolist())
-        data = subset(data, chosen)
-        title = f"{args.n_actions} actions tirées au hasard (graine {args.seed}) : {', '.join(chosen)}"
-    else:
-        title = f"Tout l'univers : {len(equities)} actions"
-    table, details = run_variants(data, engine_dir)
-    text = f"## {title}\n\nPériode mesurée : {details['début']:%d/%m/%Y} → {details['fin']:%d/%m/%Y}\n\n{format_table(table)}\n"
-    print(text)
+    full = fb.load_market_from_csv(engine_dir)
+    equities = [a for a in full.assets.index if full.assets.at[a, "asset_class"] == "EQUITY"]
+    texts, tables = [], []
+    for k in range(args.draws if args.n_actions else 1):
+        if args.n_actions:
+            rng = np.random.default_rng(args.seed + k)
+            chosen = sorted(rng.choice(equities, size=args.n_actions, replace=False).tolist())
+            data, cfg = subset(full, chosen), small_book(args.n_actions)
+            title = f"{args.n_actions} actions tirées au hasard (graine {args.seed + k}) : {', '.join(chosen)}"
+        else:
+            data, cfg = full, fb.StrategyConfig(**PROXY_THRESHOLDS)
+            title = f"Tout l'univers : {len(equities)} actions"
+        table, details = run_variants(data, engine_dir, cfg)
+        tables.append(table)
+        text = (f"## {title}\n\nPériode mesurée : {details['début']:%d/%m/%Y} → {details['fin']:%d/%m/%Y}\n\n"
+                f"{format_table(table)}\n")
+        print(text, flush=True)
+        texts.append(text)
+    if len(tables) > 1:
+        summary = draw_summary(tables)
+        lines = [f"## Moyenne de {len(tables)} tirages de {args.n_actions} actions", "",
+                 "| Variante | Rendement annuel | Sharpe | Pire perte | Bat le programme actuel |", "|---|---|---|---|---|"]
+        for r in summary.to_dict("records"):
+            lines.append(f"| {r['variante']} | {r['rendement annuel']:+.1%} | {r['Sharpe']:.2f} | {r['pire perte']:.1%} | "
+                         f"{r['bat le programme']:.0%} des tirages |")
+        texts.append("\n".join(lines) + "\n")
+        print(texts[-1])
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.out, "a", encoding="utf-8") as fh:
-            fh.write(text + "\n")
+            fh.write("\n".join(texts) + "\n")
         cal = details.get("calibrage")
         if cal is not None and len(cal):
             last = cal[cal["année"] == cal["année"].max()].sort_values("poids", ascending=False)
-            with open(Path(args.out).with_suffix(".calibrage.csv"), "w", encoding="utf-8") as fh:
-                last.to_csv(fh, index=False)
+            last.to_csv(Path(args.out).with_suffix(".calibrage.csv"), index=False)
 
 
 if __name__ == "__main__":
