@@ -88,8 +88,9 @@ Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de ve
    - jambe rapide = proxy volume, pas de vrais flux de fonds ;
    - secteurs approximés par le code SIC ;
    - une seule période historique : aucun résultat n'est une promesse.
-   - le fonds n'achète qu'à partir d'août 2018 (début des fichiers hors bourse de la FINRA) :
-     comparer aussi le S&P 500 depuis cette date, pas seulement depuis 2016.
+   - le fonds n'achète qu'à partir d'août 2018 : la liste des meilleurs gérants demande 8 trimestres
+     de cours (Alpaca : depuis 2016), puis deux déclarations publiées. Comparer aussi le S&P 500
+     depuis cette date, pas seulement depuis 2016.
 5. La position actuelle des banques sur les contrats S&P 500 et Nasdaq-100 (étape `cot`), comparée
    à leur habitude.
 6. Les dernières alertes du radar des grands acteurs (heure, jour, semaine, mois), avec les
