@@ -427,3 +427,10 @@ def test_alpaca_drops_invalid_symbols_instead_of_failing_the_batch():
     raw = p1.alpaca_query(fake, "bars", ["AAPL", "9990302D", "ZZZ9"], {"timeframe": "1Day"})
     assert list(raw) == ["AAPL"]
     assert fake.calls == ["AAPL,ZZZ9", "AAPL"]  # code CUSIP écarté d'emblée, symbole refusé retiré
+
+
+def test_session_window_is_explicit_and_avoids_the_last_15_minutes():
+    w = p1.session_window(pd.Timestamp("2026-09-22"), now=pd.Timestamp("2026-09-24T03:00:00Z"))
+    assert w == {"start": "2026-09-22T08:00:00Z", "end": "2026-09-23T00:00:00Z"}  # 4 h -> 20 h à New York
+    w = p1.session_window(pd.Timestamp("2026-09-23"), now=pd.Timestamp("2026-09-23T20:30:00Z"))
+    assert w["end"] == "2026-09-23T20:14:00Z"

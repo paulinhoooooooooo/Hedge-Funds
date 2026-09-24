@@ -1234,6 +1234,17 @@ def market_sessions(http: Http, days: int) -> list[pd.Timestamp]:
     return [pd.Timestamp(d) for d in dates[-days:]]
 
 
+def session_window(day: pd.Timestamp, now: Optional[pd.Timestamp] = None) -> dict[str, str]:
+    """Bornes explicites (UTC) d'une séance, de 4 h à 20 h à New York. Une date seule en « end » est lue
+    par Alpaca comme la fin de ce jour : elle touche alors les 15 dernières minutes, que l'offre gratuite
+    refuse (HTTP 403 « recent SIP data »). La fin est donc ramenée à 16 minutes avant l'instant présent."""
+    now = now if now is not None else pd.Timestamp.now(tz="UTC")
+    begin = pd.Timestamp(day).normalize().tz_localize("America/New_York") + pd.Timedelta(hours=4)
+    end = min(begin + pd.Timedelta(hours=16), now.tz_convert("UTC") - pd.Timedelta(minutes=16))
+    iso = lambda t: t.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"start": iso(begin), "end": iso(end)}
+
+
 def stage_alpaca(http: Optional[Http] = None, days: int = 20, hourly_sessions: int = 30) -> None:
     if http is None and not (os.environ.get("ALPACA_API_KEY_ID") and os.environ.get("ALPACA_API_SECRET_KEY")):
         print("Alpaca : clés absentes, étape ignorée (ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY).")
@@ -1266,9 +1277,7 @@ def stage_alpaca(http: Optional[Http] = None, days: int = 20, hourly_sessions: i
             continue
         raw = {}
         for chunk in chunks:
-            for sym, rows in alpaca_query(http, "bars", chunk, {
-                    "timeframe": "1Min", "start": f"{day:%Y-%m-%d}",
-                    "end": f"{day + pd.Timedelta(days=1):%Y-%m-%d}"}).items():
+            for sym, rows in alpaca_query(http, "bars", chunk, {"timeframe": "1Min", **session_window(day)}).items():
                 raw.setdefault(sym, []).extend(rows)
         hot = hot_minutes(bars_frame(raw, assets))
         found = []
