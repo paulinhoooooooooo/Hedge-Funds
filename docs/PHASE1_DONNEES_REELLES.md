@@ -80,6 +80,13 @@ le lien aux fondateurs.
 Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de vendeurs parmi les
 50 meilleurs gérants, les noms des principaux acheteurs, le radar et la position des banques.
 
+## 2 ter. Mise à jour automatique chaque soir
+
+`python backtest/mise_a_jour.py` enchaîne tout : téléchargement (5 séances de gros blocs suffisent),
+calcul du fonds, page Desk, et `outputs/notification.md` (mouvements de portefeuille de la dernière
+séance). Une tâche programmée (« Routine » Claude Code) la lance du lundi au vendredi à 22 h UTC
+(18 h à New York), republie la page Desk au même lien et envoie la notification sur le téléphone.
+
 ## 3. Ce qu'il faut rapporter aux fondateurs (en langage simple)
 
 1. Performance et risque par rapport au S&P 500 (SPY) sur la même période : rendement annuel,

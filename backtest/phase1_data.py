@@ -1473,6 +1473,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("stage", choices=["status", "all", "sec", "universe", "figi", "sectors", "prices", "finra",
                                           "cot", "ats", "short", "events", "insiders", "alpaca", "build", "names",
                                           "buyers"])
+    parser.add_argument("--block-days", type=int, default=20,
+                        help="séances de gros blocs à télécharger (étape alpaca ; 5 suffisent chaque soir)")
     parser.add_argument("--max-symbols", type=int, default=488,
                         help="actions suivies au plus (limite gratuite Tiingo : 500 symboles par mois, ETF compris)")
     args = parser.parse_args(argv)
@@ -1481,7 +1483,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         "sec": stage_sec, "universe": lambda: stage_universe(args.max_symbols), "figi": stage_figi,
         "sectors": stage_sectors, "prices": stage_prices, "finra": stage_finra, "cot": stage_cot,
         "ats": stage_ats, "short": stage_short, "events": stage_events, "insiders": stage_insiders,
-        "alpaca": stage_alpaca,
+        "alpaca": lambda: stage_alpaca(days=args.block_days),
         "build": lambda: print(json.dumps(build_engine_files(), indent=1, ensure_ascii=False)),
         "names": stage_names, "buyers": stage_buyers,
     }
