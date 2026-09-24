@@ -84,7 +84,9 @@ Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de ve
 
 `python backtest/mise_a_jour.py` enchaîne tout : téléchargement (5 séances de gros blocs suffisent),
 calcul du fonds, page Desk, et `outputs/notification.md` (mouvements de portefeuille de la dernière
-séance). Une tâche programmée (« Routine » Claude Code) la lance du lundi au vendredi à 22 h UTC
+séance). Le portefeuille réel démarre vide le 24/09/2026 (`smart_money.LIVE_START`) : seuls les achats et
+renforcements décidés depuis y entrent. La mise à jour relit aussi les déclarations de Nancy Pelosi
+(`docs/PELOSI.md`). Une tâche programmée (« Routine » Claude Code) la lance du lundi au vendredi à 22 h UTC
 (18 h à New York), republie la page Desk au même lien et envoie la notification sur le téléphone.
 
 ## 3. Ce qu'il faut rapporter aux fondateurs (en langage simple)

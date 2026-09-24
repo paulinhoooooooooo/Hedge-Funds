@@ -157,6 +157,9 @@ class StrategyConfig:
     # Trésorerie non investie placée dans l'indice (SPY) plutôt qu'en cash ; exige MarketData.market.
     # Le coupe-circuit drawdown la repasse en cash pendant sa durée.
     idle_cash_in_market: bool = False
+    # Portefeuille réel : aucun achat avant cette date (AAAA-MM-JJ) ; le portefeuille démarre vide et
+    # ne se remplit qu'avec les achats décidés à partir de ce jour. None = backtest complet.
+    trading_start: Optional[str] = None
     market_cost: float = 0.0002  # coût d'achat / vente de l'indice (2 points de base)
     risk_free_rate: float = 0.02  # taux sans risque pour Sharpe / Sortino
 
@@ -987,6 +990,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
     mkt_ret = (data.market.reindex(data.market.index.union(cal)).sort_index().ffill().reindex(cal).pct_change()
                .to_numpy() if use_market else np.zeros(len(cal)))
     index_hist = np.zeros(len(cal))
+    start_trading = pd.Timestamp(cfg.trading_start) if cfg.trading_start else None
     was_in_market = False
     derisk_until: Optional[pd.Timestamp] = None
     nav_hist = np.empty(n_t)
@@ -1164,7 +1168,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                            f"Alerte levée, accumulation de nouveau confirmée : {flow_text(i, a)}.", nav)
 
         # 5b) Nouvelles entrées : convergence des deux jambes, classées par intensité
-        if derisk_until is None:
+        if derisk_until is None and (start_trading is None or t >= start_trading):
             free = cfg.max_positions - int((scale > 0).sum())
             candidates = [
                 a for a in np.flatnonzero(entry_sig[i] & (scale == 0) & ~decided)

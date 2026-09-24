@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import html
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -159,6 +160,70 @@ def _portfolio_html(result, review: pd.DataFrame) -> str:
 <tbody>{''.join(rows)}</tbody></table></div>"""
 
 
+LIVE_ACTIONS = {
+    "ENTRY": ("buy", "ACHAT"), "ADD_REACCUMULATION": ("buy", "RENFORCEMENT"),
+    "REDUCE_DISTRIBUTION_ALERT": ("warn", "ALLÈGEMENT"), "EXIT_DISTRIBUTION_CONFIRMED": ("sell", "VENTE"),
+    "EXIT_INSTITUTIONAL_LIQUIDATION": ("sell", "VENTE"), "RISK_STOP": ("sell", "VENTE URGENTE"),
+    "RISK_DRAWDOWN": ("warn", "DÉ-RISQUAGE"), "RISK_TRIM": ("warn", "ÉCRÊTAGE"),
+}
+
+
+def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
+    """Portefeuille réel : démarre vide le jour `start`, ne contient que les décisions prises depuis."""
+    t0 = pd.Timestamp(start)
+    eq = live.equity[live.equity.index >= t0]
+    moves = live.journal[pd.to_datetime(live.journal["date"]) >= t0].sort_values("date", ascending=False)
+    n_lines = int((live.scales.iloc[-1] > 0).sum())
+    perf = eq.iloc[-1] / eq.iloc[0] - 1 if len(eq) > 1 else 0.0
+    spy_perf = None
+    if spy is not None and len(eq) > 1:
+        s = spy.reindex(eq.index).ffill()
+        spy_perf = s.iloc[-1] / s.iloc[0] - 1
+    head = (f'<p class="note">Démarré vide le {t0:%d/%m/%Y} : il ne contient que les achats et renforcements '
+            f'décidés depuis. La part non investie est placée dans le S&amp;P 500.</p>'
+            f'<div class="bank-figures"><span class="big">{_pct(perf)}</span><span class="muted">depuis le départ'
+            + (f" · S&amp;P 500 {_pct(spy_perf)}" if spy_perf is not None else "")
+            + f" · {n_lines} ligne(s) en actions</span></div>")
+    if moves.empty:
+        return head + '<p class="empty">Aucun mouvement pour l\'instant : les premiers achats apparaîtront ici.</p>'
+    rows = []
+    for r in moves.itertuples():
+        kind, text = LIVE_ACTIONS.get(r.action, ("warn", r.action))
+        rows.append(f"<tr><td>{pd.Timestamp(r.date):%d/%m/%Y}</td><td><span class='chip {kind}'>{esc(text)}</span></td>"
+                    f"<td class='ticker'>{esc(r.asset)}</td><td class='num'>{r.price:,.2f} $</td></tr>")
+    return head + f"""<div class="table-wrap"><table>
+<thead><tr><th>Date</th><th>Mouvement</th><th>Titre</th><th class="num">Prix</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table></div>"""
+
+
+def _pelosi_html(folder: Path) -> str:
+    """Comparaison avec la copie des transactions déclarées de Nancy Pelosi (backtest/pelosi.py)."""
+    table = folder / "comparaison.csv"
+    if not table.exists():
+        return ""
+    t = pd.read_csv(table)
+    rows = "".join(
+        f"<tr><td>{esc(r.portefeuille)}</td><td class='num'>{_pct(r.cagr)}</td><td class='num'>{_pct(r.max_dd)}</td>"
+        f"<td class='num'>{f'{r.sharpe:.2f}'.replace('.', ',')}</td><td class='num'>{_pct(r.cagr_1)}</td><td class='num'>{_pct(r.cagr_2)}</td></tr>"
+        for r in t.itertuples())
+    live_path = folder / "suivi_reel_mouvements.csv"
+    live = pd.read_csv(live_path) if live_path.exists() else pd.DataFrame()
+    live_text = ("Aucune nouvelle déclaration depuis le départ." if live.empty else
+                 " · ".join(f"{pd.Timestamp(r.date):%d/%m} {esc(r.action.lower())} {esc(r.ticker)}"
+                            for r in live.tail(8).itertuples()))
+    return f"""<section class="panel" aria-label="Comparaison Pelosi">
+    <h2>Face à Nancy Pelosi</h2>
+    <p class="note">Copie de ses transactions déclarées (greffe de la Chambre des représentants), achetées ou vendues
+    le lendemain de la publication, jusqu'à 45 jours après la transaction. Ses options sont copiées comme des actions
+    (approximation). Période commune depuis septembre 2018 ; moitiés séparées au 01/07/2022.</p>
+    <div class="table-wrap"><table>
+<thead><tr><th>Portefeuille</th><th class="num">Par an</th><th class="num">Pire perte</th><th class="num">Sharpe</th>
+<th class="num">2018-2022</th><th class="num">2022-2026</th></tr></thead>
+<tbody>{rows}</tbody></table></div>
+    <p class="note">Suivi réel de la copie Pelosi (démarrée vide le même jour que le fonds) : {live_text}</p>
+  </section>"""
+
+
 CSS = """
 :root {
   --bg: #f4f6f9; --surface: #ffffff; --ink: #121a24; --muted: #5a6573; --line: #dde3ea;
@@ -277,7 +342,8 @@ def _invested_text(result) -> str:
 
 def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], cot: Optional[pd.DataFrame],
                      synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
-                     benchmark_label: str = "univers équipondéré") -> str:
+                     benchmark_label: str = "univers équipondéré", live=None, live_start: Optional[str] = None,
+                     extra_html: str = "") -> str:
     """`benchmark` : indice de comparaison (S&P 500 via SPY sur données réelles) ; à défaut,
     l'univers équipondéré du moteur, qui hérite du biais du survivant de l'univers."""
     m, b = result.metrics, result.benchmark_metrics
@@ -309,14 +375,16 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
     <div class="top">{source}<span class="asof">Situation au {asof:%d/%m/%Y} · {esc(label)}</span></div>
   </div>
   <section class="kpis" aria-label="État du fonds">{kpi_html}</section>
+  {f'<section class="panel" aria-label="Portefeuille réel"><h2>Portefeuille réel · depuis le {pd.Timestamp(live_start):%d/%m/%Y}</h2>{_live_html(live, benchmark, live_start)}</section>' if live is not None else ''}
   <section class="panel chart" aria-label="Courbe du fonds">
     <h2>Le fonds face au marché</h2>
     {_chart_svg(result.equity, bench)}
     <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché ({esc(benchmark_label)})</span></div>
   </section>
+  {extra_html}
   <div class="main">
     <section class="panel" aria-label="Dernières décisions">
-      <h2>Dernières décisions</h2>
+      <h2>Dernières décisions · backtest</h2>
       <div class="filters" role="group" aria-label="Filtrer les décisions">
         <button type="button" id="f-all" data-filter="all" aria-pressed="true">Toutes</button>
         <button type="button" id="f-buy" data-filter="buy" aria-pressed="false">Achats</button>
@@ -337,7 +405,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
         {_banks_html(cot)}
       </section>
       <section class="panel" aria-label="Portefeuille">
-        <h2>Portefeuille</h2>
+        <h2>Portefeuille · backtest</h2>
         {_portfolio_html(result, review)}
       </section>
     </div>
@@ -388,7 +456,12 @@ def main(argv: Optional[list[str]] = None) -> Path:
         spy = pd.read_csv(spy_path, parse_dates=["date"]).set_index("date")["adjClose"]
         spy.index = pd.DatetimeIndex(spy.index).tz_localize(None) if spy.index.tz is not None else spy.index
         benchmark, bench_label = spy, "S&P 500 · SPY"
-    out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label),
+    live = extra = None
+    if not synthetic:
+        live = fb.run_backtest(data, replace(cfg, trading_start=sm.LIVE_START))
+        extra = _pelosi_html(ROOT / "outputs" / "pelosi")
+    out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label,
+                                    live=live, live_start=sm.LIVE_START, extra_html=extra or ""),
                    encoding="utf-8")
     print(f"Page écrite : {out}")
     return out

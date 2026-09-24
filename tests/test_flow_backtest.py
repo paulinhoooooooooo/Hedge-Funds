@@ -320,3 +320,14 @@ def test_idle_cash_follows_the_index_until_the_first_purchase():
 def test_idle_cash_in_market_requires_the_index_prices():
     with pytest.raises(ValueError, match="market"):
         fb.run_backtest(ladder_market(), fb.StrategyConfig(idle_cash_in_market=True))
+
+
+def test_live_portfolio_starts_empty_on_trading_start():
+    data = ladder_market()
+    full = fb.run_backtest(data, fb.StrategyConfig())
+    first_buy = full.gross[full.gross > 0].index[0]
+    start = first_buy + pd.Timedelta(days=60)
+    live = fb.run_backtest(data, fb.StrategyConfig(trading_start=f"{start:%Y-%m-%d}"))
+    assert (live.gross[live.gross.index < start] == 0).all()  # aucun achat avant le départ
+    entries = live.journal[live.journal["action"] == "ENTRY"]
+    assert (pd.to_datetime(entries["date"]) >= start).all()
