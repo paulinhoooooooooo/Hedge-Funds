@@ -100,18 +100,34 @@ def download(http: Optional[p1.Http] = None, years: Optional[range] = None) -> p
                              .read(f"{year}FD.xml"))
         texts.append(path.read_text(encoding="utf-8", errors="ignore"))
     index = filings_index(texts)
-    rows = []
+    if index.empty:
+        raise RuntimeError("aucune déclaration de Nancy Pelosi dans l'index du greffe (format changé ?)")
+    rows, readable = [], []
     for f in index.itertuples():
         pdf = DATA / "ptr" / f"{f.doc_id}.pdf"
         if not pdf.exists():
-            raw = http.get(PTR_URL.format(year=f.filing_date.year, doc=f.doc_id))
-            pdf.write_bytes(raw if isinstance(raw, bytes) else raw.encode("latin-1"))
+            try:
+                raw = http.get(PTR_URL.format(year=f.filing_date.year, doc=f.doc_id))
+            except p1.HttpError:
+                readable.append(False)  # listée mais pas encore en ligne : retentée au prochain passage
+                continue
+            if not raw.startswith(b"%PDF"):
+                readable.append(False)  # page d'erreur au lieu du PDF : non conservée
+                continue
+            pdf.write_bytes(raw)
         try:
             text = " ".join(page.extract_text() or "" for page in pypdf.PdfReader(pdf).pages)
-        except Exception:  # noqa: BLE001 — déclaration illisible (scan) : ignorée
+        except Exception:  # noqa: BLE001 — déclaration illisible (scan)
+            readable.append(False)
             continue
+        readable.append(True)
         rows += [{**r, "doc_id": f.doc_id, "filing_date": f.filing_date} for r in parse_ptr(text)]
+    index = index.assign(readable=readable)
+    index = index.assign(n_transactions=index["doc_id"].map(pd.Series([r["doc_id"] for r in rows]).value_counts())
+                         .fillna(0).astype(int))
+    index.to_csv(DATA / "index.csv", index=False)
     tx = pd.DataFrame(rows, columns=["ticker", "kind", "type", "tx_date", "amount", "doc_id", "filing_date"])
+    tx["doc_id"] = tx["doc_id"].astype(str)
     tx = tx.sort_values(["filing_date", "tx_date"]).reset_index(drop=True)
     tx.to_csv(DATA / "transactions.csv", index=False)
     return tx
@@ -247,7 +263,8 @@ def main(argv: Optional[list[str]] = None) -> dict:
     with pd.option_context("display.width", 200):
         print(table.to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     print(f"Suivi réel depuis le {sm.LIVE_START} : {len(live.trades)} mouvement(s)")
-    return {"table": table, "start": start, "variants": variants, "live": live, "tx": tx, "spy": spy}
+    return {"table": table, "start": start, "variants": variants, "live": live, "tx": tx, "spy": spy,
+            "index": pd.read_csv(DATA / "index.csv", parse_dates=["filing_date"], dtype={"doc_id": str})}
 
 
 if __name__ == "__main__":

@@ -46,3 +46,12 @@ def test_server_exposes_all_tools(state):
     result = asyncio.run(server.call_tool("empreinte_grands_acteurs", {"actif": "EQ_TECH_1"}))
     text = result.content[0].text if hasattr(result, "content") else str(result)
     assert "EQ_TECH_1" in text
+
+
+def test_default_data_dir_prefers_env_then_real_data(monkeypatch):
+    import serveur_fonds as sf
+    monkeypatch.setenv("FLOWFUND_DATA_DIR", "/chemin/explicite")
+    assert sf.default_data_dir() == "/chemin/explicite"
+    monkeypatch.delenv("FLOWFUND_DATA_DIR")
+    real = sf.Path(sf.__file__).resolve().parents[1] / "data" / "phase1" / "engine" / "assets.csv"
+    assert (sf.default_data_dir() is not None) == real.exists()

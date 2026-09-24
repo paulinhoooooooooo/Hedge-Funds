@@ -331,3 +331,17 @@ def test_live_portfolio_starts_empty_on_trading_start():
     assert (live.gross[live.gross.index < start] == 0).all()  # aucun achat avant le départ
     entries = live.journal[live.journal["action"] == "ENTRY"]
     assert (pd.to_datetime(entries["date"]) >= start).all()
+
+
+def test_live_start_rearms_the_drawdown_breaker():
+    """Une forte baisse de l'indice AVANT le départ ne doit pas geler les premiers achats."""
+    data = ladder_market()
+    cal = data.prices.index
+    full = fb.run_backtest(data, fb.StrategyConfig())
+    start = full.gross[full.gross > 0].index[0]
+    crash = np.where(cal < start - pd.Timedelta(days=7), 1.0, 0.6)  # -40 % une semaine avant le départ
+    data.market = pd.Series(200 * crash, index=cal)
+    cfg = fb.StrategyConfig(idle_cash_in_market=True, trading_start=f"{start:%Y-%m-%d}")
+    live = fb.run_backtest(data, cfg)
+    assert (live.journal["action"] == "ENTRY").any()
+    assert pd.to_datetime(live.journal.loc[live.journal["action"] == "ENTRY", "date"]).min() - start < pd.Timedelta(days=10)

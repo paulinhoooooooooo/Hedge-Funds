@@ -7,7 +7,6 @@ import zipfile
 
 import numpy as np
 import pandas as pd
-import pytest
 
 import flow_backtest as fb
 import phase1_data as p1

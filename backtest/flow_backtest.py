@@ -991,6 +991,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                .to_numpy() if use_market else np.zeros(len(cal)))
     index_hist = np.zeros(len(cal))
     start_trading = pd.Timestamp(cfg.trading_start) if cfg.trading_start else None
+    started = False
     was_in_market = False
     derisk_until: Optional[pd.Timestamp] = None
     nav_hist = np.empty(n_t)
@@ -1122,6 +1123,9 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
                            f"Poids de la ligne {_pct(weight, 1, False)} > limite de concentration "
                            f"{_pct(cfg.max_weight * cfg.max_weight_drift, 1, False)} : écrêtage à "
                            f"{_pct(cfg.max_weight, 0, False)} de la NAV, thèse de flux inchangée.", nav)
+        if start_trading is not None and not started and t >= start_trading:
+            # Départ du portefeuille réel : l'historique d'avant (trésorerie seule) ne compte pas
+            started, derisk_until, peak = True, None, nav
         if cfg.portfolio_dd_limit is not None:
             if derisk_until is not None and t >= derisk_until:
                 derisk_until = None

@@ -12,8 +12,9 @@ Principes :
   * LECTURE SEULE : aucun ordre n'est passé, aucune donnée n'est modifiée ;
   * AUCUN ACCÈS À UN COMPTE TRADINGVIEW : les données viennent de l'entrepôt du fonds
     (CSV au format de load_market_from_csv, sources officielles : SEC, CFTC, FINRA, cours) ;
-  * sans FLOWFUND_DATA_DIR, le serveur tourne sur les données SYNTHÉTIQUES de démonstration,
-    et chaque réponse le signale.
+  * sans FLOWFUND_DATA_DIR, le serveur lit les données réelles de data/phase1/engine si elles ont été
+    téléchargées ; à défaut, il tourne sur les données SYNTHÉTIQUES de démonstration, et chaque
+    réponse le signale.
 
 Lancement (transport stdio, utilisé par les assistants) :
     python mcp_server/serveur_fonds.py
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -168,7 +170,7 @@ def analyser_actif(state: FundState, actif: str) -> str:
         f"- En portefeuille : {'oui, poids ' + format(res.weights.iat[i, j], '.1%') if held else 'non'}",
         f"- Positionnement des gérants de référence ({spec.name}) : "
         + ("n.d." if not np.isfinite(io) else f"{io:+.1%} sur ~1 trimestre (rapport arrêté au {pd.Timestamp(pe):%d/%m/%Y})"),
-        f"- Flux nets sur 30 jours : " + ("n.d." if not np.isfinite(fr) else f"{fr:+.2%} de l'encours"),
+        "- Flux nets sur 30 jours : " + ("n.d." if not np.isfinite(fr) else f"{fr:+.2%} de l'encours"),
         f"- Signal d'achat actif : {'oui' if sig.entry.iat[i, j] else 'non'}",
         f"- Jambes en distribution : {', '.join(legs) if legs else 'aucune'}",
     ]
@@ -262,8 +264,9 @@ TOOLS: dict[str, tuple[Callable, str]] = {
 }
 
 
-def build_server(state_loader: Callable[[], FundState]):
-    """Construit le serveur MCP ; l'état n'est calculé qu'au premier appel d'outil."""
+def build_server(state_loader: Callable[[], FundState], prewarm: bool = False):
+    """Construit le serveur MCP. L'état est calculé une seule fois : au premier appel d'outil, ou dès
+    le lancement en tâche de fond (prewarm) pour que la première question n'attende pas une minute."""
     try:
         from mcp.server.mcpserver import MCPServer as Server  # SDK 2.x
     except ImportError:
@@ -271,11 +274,13 @@ def build_server(state_loader: Callable[[], FundState]):
 
     server = Server(name="fonds-flux", instructions=INSTRUCTIONS)
     cache: dict[str, FundState] = {}
+    lock = threading.Lock()
 
     def state() -> FundState:
-        if "state" not in cache:
-            cache["state"] = state_loader()
-        return cache["state"]
+        with lock:  # un seul calcul, même si une question arrive pendant le préchargement
+            if "state" not in cache:
+                cache["state"] = state_loader()
+            return cache["state"]
 
     def register(name: str, fn: Callable, description: str) -> None:
         if name in ("analyser_actif", "empreinte_grands_acteurs"):
@@ -297,12 +302,24 @@ def build_server(state_loader: Callable[[], FundState]):
 
     for tool_name, (fn, description) in TOOLS.items():
         register(tool_name, fn, description)
+    if prewarm:
+        threading.Thread(target=state, name="prechargement-fonds", daemon=True).start()
     return server
 
 
+def default_data_dir() -> Optional[str]:
+    """FLOWFUND_DATA_DIR, sinon les données réelles de la phase 1 si elles ont été téléchargées
+    (data/phase1/engine), sinon None : démonstration synthétique, signalée dans chaque réponse."""
+    explicit = os.environ.get("FLOWFUND_DATA_DIR")
+    if explicit:
+        return explicit
+    engine = Path(__file__).resolve().parents[1] / "data" / "phase1" / "engine"
+    return str(engine) if (engine / "assets.csv").exists() else None
+
+
 def main() -> None:
-    data_dir = os.environ.get("FLOWFUND_DATA_DIR") or None
-    build_server(lambda: load_state(data_dir)).run()
+    data_dir = default_data_dir()
+    build_server(lambda: load_state(data_dir), prewarm=True).run()
 
 
 if __name__ == "__main__":

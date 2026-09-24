@@ -356,10 +356,10 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
     source = ('<span class="source">Données simulées — démonstration</span>' if synthetic
               else '<span class="source real">Données réelles</span>')
     kpis = [
-        ("Rendement annuel", _pct(m["cagr"]), f"marché : {_pct(b['cagr'])}"),
-        ("Pire perte", _pct(m["max_drawdown"]), f"marché : {_pct(b['max_drawdown'])}"),
-        ("Rendement / risque", f"{m['sharpe']:.2f}".replace(".", ","), f"Sharpe · marché : {b['sharpe']:.2f}".replace(".", ",")),
-        ("Lignes détenues", str(n_lines), _invested_text(result)),
+        ("Rendement annuel · backtest", _pct(m["cagr"]), f"marché : {_pct(b['cagr'])}"),
+        ("Pire perte · backtest", _pct(m["max_drawdown"]), f"marché : {_pct(b['max_drawdown'])}"),
+        ("Rendement / risque · backtest", f"{m['sharpe']:.2f}".replace(".", ","), f"Sharpe · marché : {b['sharpe']:.2f}".replace(".", ",")),
+        ("Lignes · backtest", str(n_lines), _invested_text(result)),
     ]
     kpi_html = "".join(f'<div class="kpi"><span class="label">{esc(k)}</span><span class="value">{esc(v)}</span>'
                        f'<span class="sub">{esc(s)}</span></div>' for k, v, s in kpis)
@@ -377,7 +377,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
   <section class="kpis" aria-label="État du fonds">{kpi_html}</section>
   {f'<section class="panel" aria-label="Portefeuille réel"><h2>Portefeuille réel · depuis le {pd.Timestamp(live_start):%d/%m/%Y}</h2>{_live_html(live, benchmark, live_start)}</section>' if live is not None else ''}
   <section class="panel chart" aria-label="Courbe du fonds">
-    <h2>Le fonds face au marché</h2>
+    <h2>Backtest depuis 2016 · le fonds face au marché</h2>
     {_chart_svg(result.equity, bench)}
     <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché ({esc(benchmark_label)})</span></div>
   </section>
