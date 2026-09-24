@@ -80,14 +80,31 @@ le lien aux fondateurs.
 Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de vendeurs parmi les
 50 meilleurs gérants, les noms des principaux acheteurs, le radar et la position des banques.
 
-## 2 ter. Mise à jour automatique chaque soir
+## 2 ter. Mise à jour automatique chaque soir (et garde-fous)
 
-`python backtest/mise_a_jour.py` enchaîne tout : téléchargement (5 séances de gros blocs suffisent),
-calcul du fonds, page Desk, et `outputs/notification.md` (mouvements de portefeuille de la dernière
-séance). Le portefeuille réel démarre vide le 24/09/2026 (`smart_money.LIVE_START`) : seuls les achats et
-renforcements décidés depuis y entrent. La mise à jour relit aussi les déclarations de Nancy Pelosi
-(`docs/PELOSI.md`). Une tâche programmée (« Routine » Claude Code) la lance du lundi au vendredi à 22 h UTC
-(18 h à New York), republie la page Desk au même lien et envoie la notification sur le téléphone.
+`python backtest/mise_a_jour.py --etat <page Desk de la veille>` enchaîne tout : téléchargement (chaque
+étape retentée une fois), portefeuille réel, copie Pelosi, page Desk, `outputs/notification.md` et
+`outputs/etat_mise_a_jour.json`.
+
+- **Portefeuille réel** : démarré vide le 24/09/2026 (`smart_money.LIVE_START`) ; seuls les achats et
+  renforcements décidés depuis y entrent ; le coupe-circuit de -20 % repart de zéro ce jour-là.
+- **Données manquantes ou cours périmés** : mise à jour déclarée incomplète, aucun mouvement annoncé,
+  la page de la veille reste en place (le conteneur étant vide, une étape en échec = données absentes).
+- **Aucun mouvement perdu ni annoncé deux fois** : la page Desk publiée garde un petit état
+  (`<script id="etat-desk">` : dernière séance signalée, déclarations Pelosi déjà vues, heure de mise à
+  jour). Une soirée manquée est rattrapée le lendemain ; un jour férié n'annonce rien.
+- **Pelosi** : une déclaration pas encore en ligne ou illisible est signalée (lien) et retentée.
+
+Tâches programmées (réglages Claude → Routines), notifications sur le téléphone ET par e-mail :
+- « Fonds — mise à jour du soir » : lundi → vendredi, 22 h UTC (18 h à New York) ; republie la page Desk
+  seulement si la mise à jour est complète ; toute anomalie commence par « ⚠️ ».
+- « Fonds — contrôle du matin » : mardi → samedi, 6 h UTC ; alerte si la page n'a pas été mise à jour
+  dans la nuit (panne, limite d'utilisation atteinte…).
+
+Ce dont la chaîne dépend (à ne pas changer sans prévenir) : la branche `claude/sharp-pasteur-rnlt5h`,
+les réglages de l'environnement (`SEC_CONTACT_EMAIL`, `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`),
+le dépôt public (s'il devient privé, la tâche du soir doit recevoir l'accès au dépôt), et la page Desk
+https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9.
 
 ## 3. Ce qu'il faut rapporter aux fondateurs (en langage simple)
 
