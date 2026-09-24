@@ -293,3 +293,30 @@ def test_bias_mode_runs(synthetic):
     cfg = fb.StrategyConfig()
     biased = fb.run_backtest(synthetic, replace(cfg, ignore_publication_lags=True))
     assert np.isfinite(biased.metrics["sharpe"])
+
+
+# ---------------------------------------------------------------------------
+# Trésorerie placée dans l'indice (piste 2 des fondateurs)
+# ---------------------------------------------------------------------------
+
+def test_idle_cash_follows_the_index_until_the_first_purchase():
+    data = ladder_market()
+    cal = data.prices.index
+    data.market = pd.Series(200 * 1.0004 ** np.arange(len(cal)), index=cal)
+    cfg = fb.StrategyConfig(idle_cash_in_market=True, market_cost=0.0)
+    res = fb.run_backtest(data, cfg)
+    first_buy = res.gross[res.gross > 0].index[0]
+    before = res.equity[res.equity.index < first_buy]
+    # avant le premier achat, tout le fonds suit l'indice (+0,04 % par séance)
+    assert np.allclose(before.pct_change().dropna(), 0.0004)
+    assert res.index_exposure.iloc[0] == pytest.approx(1.0)
+    held = res.gross > 0.05
+    assert (res.index_exposure[held] + res.gross[held]).between(0.95, 1.05).all()  # le reste est dans l'indice
+    plain = fb.run_backtest(data, fb.StrategyConfig())
+    assert plain.index_exposure.eq(0).all()
+    assert len(res.trades) == len(plain.trades)  # les décisions sur les actions ne changent pas
+
+
+def test_idle_cash_in_market_requires_the_index_prices():
+    with pytest.raises(ValueError, match="market"):
+        fb.run_backtest(ladder_market(), fb.StrategyConfig(idle_cash_in_market=True))

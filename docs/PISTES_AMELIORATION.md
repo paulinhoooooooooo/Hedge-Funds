@@ -39,6 +39,19 @@ apportent 48 % du gain : le résultat dépend de quelques gagnants très volatil
 4. **La position des banques (CFTC) n'apporte pas de signal fiable** : son effet change de sens
    d'une moitié à l'autre. Ne pas l'utiliser pour décider ; la garder comme information.
 
+## Décision (24/09/2026) : pistes 1 et 2 adoptées
+
+Réglages du fonds sur données réelles : 12 lignes de même poids et trésorerie non investie placée
+dans le S&P 500. Dans le moteur, le coupe-circuit (perte de 20 %) repasse cette trésorerie en cash
+pendant 63 jours ; c'est pourquoi le résultat réel est plus prudent que le test 2b ci-dessus :
+
+| Période | Fonds | S&P 500 |
+|---|---|---|
+| 2016 → 2026 | +20,4 % / an, Sharpe 1,03, pire perte -27 % | +15,1 % / an, Sharpe 0,78, pire perte -34 % |
+| Depuis août 2018 | +21,9 % / an | +14,8 % / an |
+| Août 2018 → juin 2022 | +18,8 % / an | +9,5 % / an |
+| Juillet 2022 → 2026 | +24,3 % / an | +19,6 % / an |
+
 ## Précautions avant d'adopter un réglage
 
 - Réglages choisis en regardant les résultats : le vrai niveau sera plus bas.

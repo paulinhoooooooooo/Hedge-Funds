@@ -1414,6 +1414,9 @@ def build_engine_files(out_dir: Optional[Path] = None, lookback: int = 8, top_n:
                         ignore_index=True)
     long_px.to_csv(out_dir / "prices.csv", index=False)
     holdings[["asset", "period_end", "filing_date", "value"]].to_csv(out_dir / "holdings.csv", index=False)
+    if MARKET_ETF in prices:  # indice où placer la trésorerie inutilisée (StrategyConfig.idle_cash_in_market)
+        pd.DataFrame({"date": prices[MARKET_ETF].index, "close": prices[MARKET_ETF]["adjClose"].to_numpy()}) \
+            .to_csv(out_dir / "market.csv", index=False)
     fl = flows.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="net_flow")
     au = aum.rename_axis("date").reset_index().melt(id_vars="date", var_name="vehicle", value_name="aum")
     fl.merge(au, on=["date", "vehicle"]).dropna(subset=["net_flow"]).to_csv(out_dir / "flows.csv", index=False)

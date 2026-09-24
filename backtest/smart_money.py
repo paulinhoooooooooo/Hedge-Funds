@@ -33,6 +33,18 @@ QUARTER = pd.offsets.QuarterEnd(1)
 # identiques à l'indicateur TradingView « Smart Money Flow Monitor »).
 PROXY_FLOW_SETTINGS = {"entry_flow_threshold": 0.0, "exit_flow_threshold": -0.05}
 
+# Réglages du fonds sur données réelles, adoptés par les fondateurs le 24/09/2026
+# (docs/PISTES_AMELIORATION.md) : 12 lignes de même poids (piste 1) et trésorerie non investie
+# placée dans le S&P 500 (piste 2, si le cours du SPY est fourni : fichier market.csv).
+PHASE1_FUND_SETTINGS = {**PROXY_FLOW_SETTINGS, "sizing": "equal", "max_positions": 12}
+
+
+def phase1_config(data=None, **overrides):
+    """StrategyConfig du fonds sur données réelles ; la piste 2 n'est active que si data.market existe."""
+    from flow_backtest import StrategyConfig
+    settings = {**PHASE1_FUND_SETTINGS, "idle_cash_in_market": data is not None and data.market is not None}
+    return StrategyConfig(**{**settings, **overrides})
+
 
 def _quarter_end(dates: pd.Series) -> pd.Series:
     """Ramène chaque date d'arrêté à la fin de trimestre civile correspondante."""

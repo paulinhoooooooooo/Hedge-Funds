@@ -154,6 +154,10 @@ class StrategyConfig:
     # --- Divers
     initial_capital: float = 100_000_000.0
     cash_rate: float = 0.02  # rémunération de la trésorerie (annuelle)
+    # Trésorerie non investie placée dans l'indice (SPY) plutôt qu'en cash ; exige MarketData.market.
+    # Le coupe-circuit drawdown la repasse en cash pendant sa durée.
+    idle_cash_in_market: bool = False
+    market_cost: float = 0.0002  # coût d'achat / vente de l'indice (2 points de base)
     risk_free_rate: float = 0.02  # taux sans risque pour Sharpe / Sortino
 
     def __post_init__(self) -> None:
@@ -203,6 +207,8 @@ class MarketData:
     extras   : RadarExtras, optionnel — autres indices gratuits du radar (bourses privées, positions
                vendeuses déclarées, achats des dirigeants, franchissements de 5 %, dates de résultats,
                gros blocs)
+    market   : Series [date], optionnel — cours ajusté de l'indice (SPY) où placer la trésorerie
+               inutilisée (StrategyConfig.idle_cash_in_market)
     hourly   : DataFrame long, optionnel — asset, time, high, low, close, volume : barres horaires des
                dernières séances (heure de New York), pour l'unité de temps « heure » du radar
     """
@@ -219,6 +225,7 @@ class MarketData:
     offexchange_short: Optional[pd.DataFrame] = None
     extras: Optional[RadarExtras] = None
     hourly: Optional[pd.DataFrame] = None
+    market: Optional[pd.Series] = None  # cours de l'indice (SPY), pour placer la trésorerie inutilisée
 
     @property
     def has_ohlcv(self) -> bool:
@@ -530,6 +537,7 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
     offexchange.csv (optionnel) : date, asset, total_volume, short_volume (FINRA « Reg SHO »)
     ats.csv, short_interest.csv, insiders.csv, filings_5pct.csv, earnings.csv, blocks.csv (optionnels) :
                    indices complémentaires du radar (colonnes : voir institutional_radar.RadarExtras)
+    market.csv (optionnel) : date, close — indice (SPY) où placer la trésorerie inutilisée
     hourly.csv (optionnel) : asset, time, high, low, close, volume (barres horaires, heure de New York)
     flows.csv    : date, vehicle, net_flow, aum
                    - ETF : net_flow = variation des parts en circulation x VL ; aum = encours ;
@@ -567,8 +575,12 @@ def load_market_from_csv(data_dir: str | Path) -> MarketData:
             tables[table] = frame
     extras = RadarExtras(**tables) if tables else None
     hourly = pd.read_csv(d / "hourly.csv", keep_default_na=False, na_values=[""]) if (d / "hourly.csv").exists() else None
+    market = None
+    if (d / "market.csv").exists():
+        mk = pd.read_csv(d / "market.csv")
+        market = pd.Series(mk["close"].to_numpy(), index=_as_ns(mk["date"]), name="market").sort_index()
     data = MarketData(prices=prices, holdings=holdings, flows=flows, aum=aum, assets=assets, **ohlcv, **offx,
-                      extras=extras, hourly=hourly)
+                      extras=extras, hourly=hourly, market=market)
     data.validate()
     return data
 
@@ -906,6 +918,7 @@ class BacktestResult:
     journal: pd.DataFrame
     metrics: dict
     benchmark_metrics: dict
+    index_exposure: Optional[pd.Series] = None  # part de la NAV placée dans l'indice (trésorerie)
 
 
 def _pct(x: float, digits: int = 1, signed: bool = True) -> str:
@@ -968,6 +981,13 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
 
     cash = cfg.initial_capital
     peak = cash
+    use_market = cfg.idle_cash_in_market
+    if use_market and data.market is None:
+        raise ValueError("idle_cash_in_market exige le cours de l'indice (MarketData.market, fichier market.csv)")
+    mkt_ret = (data.market.reindex(data.market.index.union(cal)).sort_index().ffill().reindex(cal).pct_change()
+               .to_numpy() if use_market else np.zeros(len(cal)))
+    index_hist = np.zeros(len(cal))
+    was_in_market = False
     derisk_until: Optional[pd.Timestamp] = None
     nav_hist = np.empty(n_t)
     w_hist = np.zeros((n_t, n))
@@ -1024,9 +1044,17 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
         p = px[i]
 
         # 1) Intérêts sur la trésorerie (solde de la veille)
+        #    ou, si la trésorerie est placée dans l'indice, performance de l'indice depuis la veille
+        in_market = use_market and derisk_until is None and cash > 0
         if prev_t is not None:
-            cash *= (1.0 + cfg.cash_rate) ** ((t - prev_t).days / 365.0)
+            if in_market and np.isfinite(mkt_ret[i]):
+                cash *= 1.0 + mkt_ret[i]
+            else:
+                cash *= (1.0 + cfg.cash_rate) ** ((t - prev_t).days / 365.0)
         prev_t = t
+        if use_market and in_market != was_in_market and cash > 0:
+            cash -= cash * cfg.market_cost  # achat ou vente de l'indice à l'entrée / sortie du coupe-circuit
+        was_in_market = in_market
 
         # 2) Exécution fractionnée des ordres décidés au plus tard la veille
         day_cost = day_traded = 0.0
@@ -1040,7 +1068,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
             if abs(qty) * p[a] < 1e-6:
                 continue
             notional = qty * p[a]
-            fee = abs(notional) * cost_rate[a]
+            fee = abs(notional) * (cost_rate[a] + (cfg.market_cost if in_market else 0.0))
             cash -= notional + fee
             day_cost += fee
             day_traded += abs(notional)
@@ -1070,6 +1098,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
 
         # 3) Valorisation
         nav = cash + float(np.nansum(units * p))
+        index_hist[i] = cash / nav if in_market and nav > 0 else 0.0
 
         # 4) Risk Manager : garde-fous indépendants des signaux de flux
         if cfg.position_stop_loss is not None:
@@ -1190,6 +1219,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
     metrics["turnover_annual"] = float(traded.sum() / equity.mean() / metrics["years"])
     metrics["total_costs_pct_initial"] = float(cost_hist.sum() / cfg.initial_capital)
     metrics["avg_gross_exposure"] = float(weights.sum(axis=1).mean())
+    metrics["avg_index_exposure"] = float(index_hist.mean())
     metrics.update(trade_statistics(trades_df))
 
     return BacktestResult(
@@ -1199,6 +1229,7 @@ def run_backtest(data: MarketData, cfg: Optional[StrategyConfig] = None, signals
         costs=pd.Series(cost_hist, index=cal, name="costs"), traded=traded,
         derisk=pd.Series(derisk_hist, index=cal, name="derisk"), trades=trades_df, journal=journal_df,
         metrics=metrics, benchmark_metrics=compute_metrics(benchmark, cfg.risk_free_rate),
+        index_exposure=pd.Series(index_hist, index=cal, name="index"),
     )
 
 
@@ -1616,6 +1647,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--execution-days", type=int, default=d.execution_days)
     p.add_argument("--stop-loss", type=float, default=d.position_stop_loss, help="perte critique par ligne ; <= 0 désactive")
     p.add_argument("--dd-limit", type=float, default=d.portfolio_dd_limit, help="coupe-circuit drawdown ; <= 0 désactive")
+    p.add_argument("--idle-cash-in-market", action="store_true",
+                   help="trésorerie non investie placée dans l'indice (market.csv : SPY)")
     p.add_argument("--no-bias-study", action="store_true", help="ne pas relancer le backtest sans délais de publication")
     p.add_argument("--no-plot", action="store_true")
     p.add_argument("--tradingview", action="store_true",
@@ -1633,6 +1666,7 @@ def main(argv: Optional[list[str]] = None) -> Optional[BacktestResult]:
         sizing=args.sizing, max_positions=args.max_positions, execution_days=args.execution_days,
         position_stop_loss=args.stop_loss if args.stop_loss and args.stop_loss > 0 else None,
         portfolio_dd_limit=args.dd_limit if args.dd_limit and args.dd_limit > 0 else None,
+        idle_cash_in_market=args.idle_cash_in_market,
     )
     if args.multi_seed:
         run_multi_seed(cfg, args.multi_seed)

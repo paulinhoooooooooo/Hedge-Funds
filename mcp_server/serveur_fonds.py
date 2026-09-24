@@ -36,6 +36,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backtest"))
 
 import flow_backtest as fb  # noqa: E402
+import smart_money as sm  # noqa: E402
 import trade_cards as tc  # noqa: E402
 from market_footprint import describe_footprint  # noqa: E402
 
@@ -76,7 +77,7 @@ def load_state(data_dir: Optional[str] = None, seed: int = 7) -> FundState:
         data = fb.load_market_from_csv(data_dir)
         label, synthetic = f"données réelles ({data_dir})", False
         # Jambe rapide gratuite = Chaikin Money Flow des ETF sectoriels (seuils du §9.2 de la synthèse)
-        cfg = fb.StrategyConfig(entry_flow_threshold=0.0, exit_flow_threshold=-0.05)
+        cfg = sm.phase1_config(data)
         buyers = _optional_csv(Path(data_dir) / "smart_money_buyers.csv", ("period_end", "available_date"))
         cot = _optional_csv(Path(__file__).resolve().parents[1] / "data" / "phase1" / "cot_dealers.csv",
                             ("report_date", "available_date"))
@@ -115,7 +116,9 @@ def etat_du_fonds(state: FundState) -> str:
     rec = "non récupéré" if m["recovery_time_days"] is None else f"{m['recovery_time_days']} jours"
     return _header(state) + "\n".join([
         "## État du fonds",
-        f"- Lignes en portefeuille : {n_lines} ; part investie : {state.result.gross.iloc[-1]:.0%}",
+        f"- Lignes en portefeuille : {n_lines} ; part investie en actions : {state.result.gross.iloc[-1]:.0%}"
+        + (f" ; trésorerie placée dans le S&P 500 : {state.result.index_exposure.iloc[-1]:.0%}"
+           if state.result.index_exposure is not None and state.result.index_exposure.iloc[-1] > 0 else ""),
         f"- Rendement annuel moyen : {m['cagr']:+.1%} (univers équipondéré : {b['cagr']:+.1%})",
         f"- Sharpe (rendement par unité de risque) : {m['sharpe']:.2f} (univers : {b['sharpe']:.2f})",
         f"- Pire perte depuis un plus haut : {m['max_drawdown']:.1%} ; temps pour s'en remettre : {rec}",

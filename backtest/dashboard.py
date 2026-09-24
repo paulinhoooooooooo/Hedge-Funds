@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 
 import flow_backtest as fb
+import smart_money as sm
 import trade_cards as tc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -266,6 +267,14 @@ SCRIPT = """
 """
 
 
+def _invested_text(result) -> str:
+    stocks = result.gross.iloc[-1]
+    index = result.index_exposure.iloc[-1] if result.index_exposure is not None else 0.0
+    if index > 0:
+        return f"actions {_pct(stocks, 0, False)} · S&P 500 {_pct(index, 0, False)}"
+    return f"part investie : {_pct(stocks, 0, False)}"
+
+
 def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], cot: Optional[pd.DataFrame],
                      synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
                      benchmark_label: str = "univers équipondéré") -> str:
@@ -284,7 +293,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
         ("Rendement annuel", _pct(m["cagr"]), f"marché : {_pct(b['cagr'])}"),
         ("Pire perte", _pct(m["max_drawdown"]), f"marché : {_pct(b['max_drawdown'])}"),
         ("Rendement / risque", f"{m['sharpe']:.2f}".replace(".", ","), f"Sharpe · marché : {b['sharpe']:.2f}".replace(".", ",")),
-        ("Lignes détenues", str(n_lines), f"part investie : {_pct(result.gross.iloc[-1], 0, False)}"),
+        ("Lignes détenues", str(n_lines), _invested_text(result)),
     ]
     kpi_html = "".join(f'<div class="kpi"><span class="label">{esc(k)}</span><span class="value">{esc(v)}</span>'
                        f'<span class="sub">{esc(s)}</span></div>' for k, v, s in kpis)
@@ -357,7 +366,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     args = parser.parse_args(argv)
     if args.data_dir:
         data = fb.load_market_from_csv(args.data_dir)
-        cfg = fb.StrategyConfig(entry_flow_threshold=0.0, exit_flow_threshold=-0.05)
+        cfg = sm.phase1_config(data)
         synthetic, label = False, "actions américaines"
     else:
         data, cfg = fb.generate_synthetic_market(seed=7), fb.StrategyConfig()

@@ -57,8 +57,12 @@ le quota Tiingo du mois.
 
 ```bash
 python backtest/flow_backtest.py --data-dir data/phase1/engine --entry-flow 0 --exit-flow -0.05 \
-    --output-dir outputs/phase1 --tradingview
+    --sizing equal --max-positions 12 --idle-cash-in-market --output-dir outputs/phase1 --tradingview
 ```
+
+Réglages adoptés par les fondateurs le 24/09/2026 (`docs/PISTES_AMELIORATION.md`) : 12 lignes de même
+poids et trésorerie non investie placée dans le S&P 500 (`market.csv`, écrit par l'étape `build`). La page
+Desk et le serveur MCP les appliquent d'office (`smart_money.phase1_config`).
 
 Les seuils de flux `0` / `-0.05` sont ceux du proxy gratuit (Chaikin Money Flow des ETF
 sectoriels, §9.2 de la synthèse). Le serveur MCP du fonds peut ensuite répondre sur ces données :
