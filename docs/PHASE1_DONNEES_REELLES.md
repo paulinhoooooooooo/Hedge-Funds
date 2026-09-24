@@ -16,6 +16,9 @@ python -m pytest -q                      # tous les tests doivent passer
 python backtest/phase1_data.py status    # SEC_CONTACT_EMAIL et ALPACA doivent être « défini »
 ```
 
+Clés Alpaca saisies à l'envers dans les réglages (l'identifiant commence par `PK`) : le script les remet
+dans l'ordre tout seul.
+
 Domaines autorisés nécessaires : `www.sec.gov`, `data.sec.gov`, `api.openfigi.com`,
 `publicreporting.cftc.gov`, `api.tiingo.com`, `cdn.finra.org`, `api.finra.org`, `data.alpaca.markets` (l'environnement est en accès
 réseau « Complet » : rien à ajouter).
@@ -85,6 +88,8 @@ Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de ve
    - jambe rapide = proxy volume, pas de vrais flux de fonds ;
    - secteurs approximés par le code SIC ;
    - une seule période historique : aucun résultat n'est une promesse.
+   - le fonds n'achète qu'à partir d'août 2018 (début des fichiers hors bourse de la FINRA) :
+     comparer aussi le S&P 500 depuis cette date, pas seulement depuis 2016.
 5. La position actuelle des banques sur les contrats S&P 500 et Nasdaq-100 (étape `cot`), comparée
    à leur habitude.
 6. Les dernières alertes du radar des grands acteurs (heure, jour, semaine, mois), avec les
