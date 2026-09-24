@@ -17,7 +17,7 @@ Période mesurée : 04/01/2019 → 23/09/2026
 | 4 · Météo du marché | +8.6% | 0.65 | -17.3% | 300 | 48% | 60% |
 | 5 · Comptes des entreprises | +7.9% | 0.63 | -14.2% | 303 | 53% | 62% |
 | 6 · Contrôle des risques | +4.2% | 0.30 | -13.5% | 286 | 47% | 44% |
-| 7 · Actualités | non testable : clés Alpaca absentes de cette session | | | | | |
+| 7 · Actualités | non testé : il faut d'abord transformer les nouvelles en signal (ton positif ou négatif) | | | | | |
 | 8 · Coût d'emprunt | non testable : pas d'historique gratuit | | | | | |
 | 1 + 4 + 6 + 2 ensemble | +5.6% | 0.48 | -15.5% | 257 | 53% | 45% |
 
@@ -52,7 +52,7 @@ Période mesurée : 04/01/2019 → 23/09/2026
 | 4 · Météo du marché | -0.4% | -0.27 | -24.1% | 20 | 40% | 15% |
 | 5 · Comptes des entreprises | +1.3% | -0.05 | -26.1% | 18 | 44% | 13% |
 | 6 · Contrôle des risques | +2.7% | 0.13 | -12.3% | 21 | 43% | 13% |
-| 7 · Actualités | non testable : clés Alpaca absentes de cette session | | | | | |
+| 7 · Actualités | non testé : il faut d'abord transformer les nouvelles en signal (ton positif ou négatif) | | | | | |
 | 8 · Coût d'emprunt | non testable : pas d'historique gratuit | | | | | |
 | 1 + 4 + 6 + 2 ensemble | +3.7% | 0.36 | -8.1% | 9 | 78% | 7% |
 

@@ -19,8 +19,8 @@ sans rien changer au programme actuel quand elle est désactivée :
 
 Non testables sur l'historique avec des données gratuites :
   3  options     pas d'historique gratuit de l'activité sur les options action par action
-  7  actualités  historique disponible chez Alpaca, dont les clés ne sont pas dans cette session ;
-                 les nouvelles servent surtout à expliquer, pas à décider
+  7  actualités  l'historique existe (Alpaca), mais il faut d'abord transformer le texte des
+                 nouvelles en signal (ton positif ou négatif) ; elles servent surtout à expliquer
   8  emprunt     le fichier gratuit du coût d'emprunt des actions n'a pas d'historique
 
 Usage :
@@ -270,7 +270,7 @@ def run_variants(data: fb.MarketData, engine_dir: Path, base_cfg: Optional[fb.St
     rows.append(run("4 · Météo du marché", data, base_cfg, apply_regime(sig, macro) if macro is not None else None))
     rows.append(run("5 · Comptes des entreprises", data, base_cfg, apply_fundamentals(sig, ey) if ey is not None else None))
     rows.append(run("6 · Contrôle des risques", data, risk_cfg, sig))
-    rows.append({"variante": "7 · Actualités", "note": "clés Alpaca absentes de cette session"})
+    rows.append({"variante": "7 · Actualités", "note": "il faut d'abord transformer les nouvelles en signal (ton positif ou négatif)"})
     rows.append({"variante": "8 · Coût d'emprunt", "note": "pas d'historique gratuit"})
     combo = None
     if real_sig is not None and macro is not None:
