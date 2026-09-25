@@ -26,3 +26,20 @@ Signal prometteur, contrairement aux flux des plateformes (docs/ONCHAIN.md) : il
 gardé sur les deux moitiés, avec des pertes bien plus faibles. Mais l'historique ne couvre que 2 ans et
 8 mois (un seul cycle), et le résultat varie beaucoup selon le réglage (+16 % à +50 %). À suivre en
 simulation avant tout argent réel. Le fonds actuel (actions américaines) n'est pas modifié.
+
+## Sur 8 ans : les institutions sur les contrats à terme bitcoin (CME, 2018 → 2026)
+
+Les flux des ETF n'existant que depuis 2024, `python backtest/cot_btc.py` teste la même idée sur 8 ans avec
+le rapport hebdomadaire de la CFTC : positions nettes des gestionnaires d'actifs et des fonds spéculatifs
+sur le contrat bitcoin du CME (connues le lundi suivant, frais 0,20 %).
+
+| Règle (16/04/2018 → 23/09/2026) | Par an | Pire perte |
+|---|---|---|
+| Bitcoin acheté et gardé | +32 % | -77 % |
+| Bitcoin si les gestionnaires d'actifs augmentent leurs positions (1, 4 ou 13 semaines) | -4 % à +20 % | -64 % à -77 % |
+| Bitcoin si les fonds spéculatifs augmentent leurs positions (1, 4 ou 13 semaines) | -4 % à +26 % | -64 % à -80 % |
+| Contrôle : bitcoin s'il a monté (1, 4 ou 13 semaines) | +25 % à +30 % | -57 % à -72 % |
+
+Aucune règle « institutions » ne bat le bitcoin gardé, ni même la simple tendance du prix. Sur longue
+période, suivre les positions des institutions ne donne pas d'avance : le bon résultat des flux d'ETF
+(2024-2026) reste à confirmer dans le temps.
