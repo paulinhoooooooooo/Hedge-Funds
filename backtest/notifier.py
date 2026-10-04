@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import time
 import urllib.request
 
 SERVER = "https://ntfy.sh"
@@ -27,7 +28,7 @@ def _header(value: str) -> str:
 
 
 def send(title: str, message: str, urgent: bool = False, topic: str | None = None,
-         click: str | None = None) -> bool:
+         click: str | None = None, retries: int = 6, wait: float = 20.0) -> bool:
     """Envoie la notification ; renvoie False (sans lever d'erreur) si aucun sujet ou en cas d'échec."""
     topic = (topic or os.environ.get("NTFY_TOPIC", "")).strip()
     if not topic:
@@ -39,13 +40,22 @@ def send(title: str, message: str, urgent: bool = False, topic: str | None = Non
                "Tags": "warning" if urgent else "chart_with_upwards_trend", "Markdown": "yes"}
     if click:
         headers["Click"] = click
-    req = urllib.request.Request(f"{SERVER}/{topic}", data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return 200 <= resp.status < 300
-    except Exception as err:  # noqa: BLE001 — une notification manquée ne doit jamais casser la mise à jour
-        print(f"Notification ntfy non envoyée : {type(err).__name__}", file=sys.stderr)
-        return False
+    if os.environ.get("NTFY_TOKEN"):  # compte ntfy (facultatif) : quota propre, indépendant de l'adresse IP
+        headers["Authorization"] = f"Bearer {os.environ['NTFY_TOKEN'].strip()}"
+    # Le quota gratuit de ntfy.sh se compte par adresse IP ; les machines cloud partagent leurs adresses :
+    # en cas de refus (429) ou de panne, on réessaie, la sortie réseau pouvant changer d'adresse.
+    for attempt in range(retries):
+        req = urllib.request.Request(f"{SERVER}/{topic}", data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+        except Exception as err:  # noqa: BLE001 — une notification manquée ne doit jamais casser la mise à jour
+            code = getattr(err, "code", type(err).__name__)
+            print(f"Notification ntfy non envoyée (essai {attempt + 1}/{retries}) : {code}", file=sys.stderr)
+        if attempt < retries - 1:
+            time.sleep(wait * (attempt + 1))
+    return False
 
 
 if __name__ == "__main__":

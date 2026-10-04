@@ -1,3 +1,5 @@
+import urllib.error  # noqa: F401
+
 import notifier
 
 
@@ -39,4 +41,26 @@ def test_network_failure_never_breaks_the_update(monkeypatch):
     def boom(*a, **k):
         raise OSError("réseau coupé")
     monkeypatch.setattr(notifier.urllib.request, "urlopen", boom)
-    assert notifier.send("Fonds", "texte", topic="x") is False
+    assert notifier.send("Fonds", "texte", topic="x", retries=2, wait=0) is False
+
+
+def test_quota_refusal_is_retried(monkeypatch):
+    calls = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def flaky(req, timeout):
+        calls.append(1)
+        if len(calls) < 3:
+            raise notifier.urllib.error.HTTPError(req.full_url, 429, "quota", {}, None)
+        return Resp()
+
+    monkeypatch.setattr(notifier.urllib.request, "urlopen", flaky)
+    assert notifier.send("Fonds", "texte", topic="x", retries=5, wait=0) is True and len(calls) == 3
