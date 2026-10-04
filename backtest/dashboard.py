@@ -232,12 +232,14 @@ def _live_lines_html(live, t0: pd.Timestamp) -> str:
     held = held.sort_values("ret", ascending=False)
     closed = trades[trades["exit_reason"] != "EN_COURS"].sort_values("exit_date", ascending=False)
 
-    def ret_cell(r: float) -> str:
+    def ret_cell(r: float, extra: str = "") -> str:
         cls = "pos" if r > 0 else ("neg" if r < 0 else "")
-        return f"<td class='num {cls}'>{_pct(r)}</td>"
+        return f"<td class='{extra}num {cls}'>{_pct(r)}</td>"
 
-    rows = [f"<tr><td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret)}"
-            f"<td class='num'>{r.avg_entry_price:,.2f} $</td><td class='num'>{last_px.get(r.asset, float('nan')):,.2f} $</td>"
+    # data-asset / data-entry : le logiciel lancé sur un ordinateur (temps_reel.py) y met les cours en direct.
+    rows = [f"<tr class='live-line' data-asset='{esc(r.asset)}' data-entry='{r.avg_entry_price:.6f}'>"
+            f"<td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret, 'lv-ret ')}"
+            f"<td class='num'>{r.avg_entry_price:,.2f} $</td><td class='lv-px num'>{last_px.get(r.asset, float('nan')):,.2f} $</td>"
             f"<td class='num'>{_pct(weights.get(r.asset, 0.0), 1, False)}</td><td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td></tr>"
             for r in held.itertuples()]
     html = ""
@@ -246,7 +248,8 @@ def _live_lines_html(live, t0: pd.Timestamp) -> str:
         html += f"""<h3 class="label">Lignes détenues · rendement de chaque action depuis l'achat</h3><div class="table-wrap"><table>
 <thead><tr><th>Titre</th><th class="num">Rendement</th><th class="num">Prix d'achat</th><th class="num">Cours</th><th class="num">Poids</th><th>Acheté le</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
-<p class="note">Rendement moyen des lignes détenues : {_pct(avg)} ; {int((held['ret'] > 0).sum())} en gain, {int((held['ret'] < 0).sum())} en perte.</p>"""
+<p class="note" id="lv-summary">Rendement moyen des lignes détenues : {_pct(avg)} ; {int((held['ret'] > 0).sum())} en gain, {int((held['ret'] < 0).sum())} en perte.</p>
+<p class="note" id="lv-status">Cours de clôture du {last_px.name:%d/%m/%Y} (mise à jour du matin). Pour les cours en direct, lancez le logiciel sur votre ordinateur : <code>python backtest/temps_reel.py</code>.</p>"""
     if not closed.empty:
         crow = [f"<tr><td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret)}<td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td>"
                 f"<td>{pd.Timestamp(r.exit_date):%d/%m/%Y}</td></tr>"
@@ -441,6 +444,43 @@ SCRIPT = """
       el.addEventListener('input', function () { save(el.id === 'pf-total' ? 'total' : 'invested', el.value); update(); });
     });
     update();
+  }
+  // Cours en direct : seulement quand la page est ouverte par le logiciel local (temps_reel.py), qui
+  // fournit /api/cours. Ailleurs (page Desk en ligne), la requête échoue et les valeurs du matin restent.
+  var lines = document.querySelectorAll('tr.live-line');
+  if (lines.length && /^https?:$/.test(location.protocol)) {
+    var status = document.getElementById('lv-status'), summary = document.getElementById('lv-summary');
+    var symbols = Array.prototype.map.call(lines, function (tr) { return tr.getAttribute('data-asset'); });
+    function pct(x) { return (x > 0 ? '+' : '') + (x * 100).toFixed(1).replace('.', ',') + '%'; }
+    function usd(x) { return x.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' $'; }
+    var live = false, timer = null;
+    function refresh() {
+      fetch('/api/cours?symbols=' + encodeURIComponent(symbols.join(',')), {cache: 'no-store'})
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (data) {
+          var rets = [];
+          lines.forEach(function (tr) {
+            var q = (data.cours || {})[tr.getAttribute('data-asset')], entry = parseFloat(tr.getAttribute('data-entry'));
+            if (!q || !(q.prix > 0) || !(entry > 0)) return;
+            var ret = q.prix / entry - 1, cell = tr.querySelector('.lv-ret');
+            rets.push(ret);
+            cell.textContent = pct(ret);
+            cell.className = 'lv-ret num ' + (ret > 0 ? 'pos' : (ret < 0 ? 'neg' : ''));
+            tr.querySelector('.lv-px').textContent = usd(q.prix);
+          });
+          if (!rets.length) return;
+          live = true;
+          var avg = rets.reduce(function (a, b) { return a + b; }, 0) / rets.length;
+          summary.textContent = 'Rendement moyen des lignes détenues : ' + pct(avg) + ' ; ' +
+            rets.filter(function (r) { return r > 0; }).length + ' en gain, ' +
+            rets.filter(function (r) { return r < 0; }).length + ' en perte.';
+          status.textContent = 'En direct · cours mis à jour à ' + new Date().toLocaleTimeString('fr-FR') +
+            ' (' + (data.source || 'Alpaca') + ', actualisation chaque minute ; hors séance : dernier cours échangé).';
+        })
+        .catch(function () { if (!live && timer) clearInterval(timer); });  // pas de logiciel local : on s’arrête
+    }
+    refresh();
+    timer = setInterval(refresh, 60000);
   }
   var buttons = document.querySelectorAll('.filters button');
   buttons.forEach(function (btn) {

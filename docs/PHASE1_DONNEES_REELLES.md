@@ -80,6 +80,22 @@ le lien aux fondateurs.
 Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de vendeurs parmi les
 50 meilleurs gérants, les noms des principaux acheteurs, le radar et la position des banques.
 
+### Rendement de chaque action en direct (sur un ordinateur)
+
+La page en ligne montre les cours de clôture de la veille (mise à jour du matin). Pour voir le
+cours et le rendement de chaque action du portefeuille réel **en direct** (actualisés chaque
+minute, source Alpaca IEX gratuite), lancer sur un ordinateur (Windows, Mac, Linux) :
+
+```bash
+python backtest/temps_reel.py               # ouvre http://127.0.0.1:8765 dans le navigateur
+python backtest/temps_reel.py --mise-a-jour   # régénère d'abord la page avec les données du jour
+```
+
+Les clés Alpaca restent sur l'ordinateur : variables d'environnement, ou fichier `outputs/cles.env`
+(jamais versionné) avec les lignes `ALPACA_API_KEY_ID=…` et `ALPACA_API_SECRET_KEY=…`. Sans clés,
+ou si Alpaca ne répond pas, la page garde les valeurs du matin. Le serveur n'écoute que
+l'ordinateur lui-même (127.0.0.1).
+
 ## 2 ter. Mise à jour automatique chaque soir (et garde-fous)
 
 `python backtest/mise_a_jour.py --etat <page Desk de la veille>` enchaîne tout : téléchargement (chaque
