@@ -278,3 +278,18 @@ def test_buyers_text_names_buyers_and_sellers_and_ignores_missing_values():
     assert "Qui achète : Bard Associates (+155% d'actions)" in text and "Qui vend : Burns Matteson" in text
     early = tc._buyers_text(buyers, "ETN", pd.Timestamp("2026-06-01"))  # seul le 1er trimestre est publié
     assert "A (+5% d'actions)" in early and "nan" not in early and "Qui vend" not in early
+
+
+def test_live_portfolio_shows_the_return_of_each_held_stock():
+    import dashboard
+    import flow_backtest as fb
+    data = fb.generate_synthetic_market(start="2018-01-02", end="2020-12-31", seed=3)
+    live = fb.run_backtest(data, fb.StrategyConfig(trading_start="2019-06-03"))
+    html = dashboard._live_html(live, None, "2019-06-03")
+    held = live.trades[(live.trades["exit_reason"] == "EN_COURS")
+                       & (pd.to_datetime(live.trades["first_fill"]) >= "2019-06-03")]
+    if len(held):
+        assert "Lignes détenues" in html
+        r = held.iloc[0]
+        expected = live.signals.prices.iloc[-1][r["asset"]] / r["avg_entry_price"] - 1
+        assert dashboard._pct(expected) in html  # rendement = cours / prix d'achat - 1

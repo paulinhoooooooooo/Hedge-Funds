@@ -208,14 +208,53 @@ def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
             + f" · {n_lines} ligne(s) en actions</span></div>")
     if moves.empty:
         return head + '<p class="empty">Aucun mouvement pour l\'instant : les premiers achats apparaîtront ici.</p>'
+    head += _live_lines_html(live, t0)
     rows = []
     for r in moves.itertuples():
         kind, text = LIVE_ACTIONS.get(r.action, ("warn", r.action))
         rows.append(f"<tr><td>{pd.Timestamp(r.date):%d/%m/%Y}</td><td><span class='chip {kind}'>{esc(text)}</span></td>"
                     f"<td class='ticker'>{esc(r.asset)}</td><td class='num'>{r.price:,.2f} $</td></tr>")
-    return head + f"""<div class="table-wrap"><table>
+    return head + f"""<h3 class="label">Historique des mouvements</h3><div class="table-wrap"><table>
 <thead><tr><th>Date</th><th>Mouvement</th><th>Titre</th><th class="num">Prix</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>"""
+
+
+def _live_lines_html(live, t0: pd.Timestamp) -> str:
+    """Rendement de chaque action du portefeuille réel : lignes détenues, puis lignes vendues depuis le départ."""
+    trades = live.trades[pd.to_datetime(live.trades["first_fill"]) >= t0].rename(columns={"return": "ret"})
+    if trades.empty:
+        return ""
+    last_px = live.signals.prices.iloc[-1]
+    weights = live.weights.iloc[-1]
+    held = trades[trades["exit_reason"] == "EN_COURS"].copy()
+    # Rendement d'une ligne détenue = cours actuel / prix d'achat moyen - 1 (lisible, comparable au cours affiché)
+    held["ret"] = held["asset"].map(last_px) / held["avg_entry_price"] - 1.0
+    held = held.sort_values("ret", ascending=False)
+    closed = trades[trades["exit_reason"] != "EN_COURS"].sort_values("exit_date", ascending=False)
+
+    def ret_cell(r: float) -> str:
+        cls = "pos" if r > 0 else ("neg" if r < 0 else "")
+        return f"<td class='num {cls}'>{_pct(r)}</td>"
+
+    rows = [f"<tr><td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret)}"
+            f"<td class='num'>{r.avg_entry_price:,.2f} $</td><td class='num'>{last_px.get(r.asset, float('nan')):,.2f} $</td>"
+            f"<td class='num'>{_pct(weights.get(r.asset, 0.0), 1, False)}</td><td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td></tr>"
+            for r in held.itertuples()]
+    html = ""
+    if rows:
+        avg = held["ret"].mean()
+        html += f"""<h3 class="label">Lignes détenues · rendement de chaque action depuis l'achat</h3><div class="table-wrap"><table>
+<thead><tr><th>Titre</th><th class="num">Rendement</th><th class="num">Prix d'achat</th><th class="num">Cours</th><th class="num">Poids</th><th>Acheté le</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table></div>
+<p class="note">Rendement moyen des lignes détenues : {_pct(avg)} ; {int((held['ret'] > 0).sum())} en gain, {int((held['ret'] < 0).sum())} en perte.</p>"""
+    if not closed.empty:
+        crow = [f"<tr><td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret)}<td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td>"
+                f"<td>{pd.Timestamp(r.exit_date):%d/%m/%Y}</td></tr>"
+                for r in closed.itertuples()]
+        html += f"""<h3 class="label">Lignes vendues depuis le départ</h3><div class="table-wrap"><table>
+<thead><tr><th>Titre</th><th class="num">Rendement</th><th>Acheté le</th><th>Vendu le</th></tr></thead>
+<tbody>{''.join(crow)}</tbody></table></div>"""
+    return html
 
 
 def _pelosi_html(folder: Path) -> str:
@@ -337,7 +376,10 @@ h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: 0.06em; colo
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
-.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.num.pos { color: var(--buy); }
+.num.neg { color: var(--sell); }
+h3.label { margin: 4px 0 0; }
 footer { color: var(--muted); font-size: 0.82rem; }
 @media (prefers-reduced-motion: no-preference) { .ticket { transition: border-color .15s; } .ticket:hover { border-color: var(--accent); } }
 """
