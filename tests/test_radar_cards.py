@@ -264,3 +264,16 @@ def test_hourly_view_counts_only_for_the_last_session():
     old = ir.compute_radar(high.iloc[:-1], low.iloc[:-1], close.iloc[:-1], volume.iloc[:-1], hourly={"X": bars})
     base = ir.compute_radar(high.iloc[:-1], low.iloc[:-1], close.iloc[:-1], volume.iloc[:-1])
     pd.testing.assert_frame_equal(old.score, base.score)  # heures d'une autre séance : ignorées
+
+
+def test_chart_draws_the_pelosi_copy_from_its_start_at_the_fund_level():
+    import dashboard
+    idx = pd.bdate_range("2018-01-01", periods=400)
+    fund = pd.Series(np.linspace(100, 200, 400), index=idx)
+    bench = pd.Series(np.linspace(100, 150, 400), index=idx)
+    pelosi = pd.Series(np.linspace(50, 100, 200), index=idx[200:])  # démarre plus tard, autre échelle
+    svg = dashboard._chart_svg(fund, bench, pelosi)
+    assert 'class="line-pelosi"' in svg and 'class="end-label pelosi"' in svg
+    # la copie démarre au niveau du fonds ce jour-là (~150) et double : fin vers 300
+    assert ">29" in svg or ">30" in svg
+    assert 'line-pelosi' not in dashboard._chart_svg(fund, bench)
