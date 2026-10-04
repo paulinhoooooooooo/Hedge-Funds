@@ -277,3 +277,17 @@ def test_chart_draws_the_pelosi_copy_from_its_start_at_the_fund_level():
     # la copie démarre au niveau du fonds ce jour-là (~150) et double : fin vers 300
     assert ">29" in svg or ">30" in svg
     assert 'line-pelosi' not in dashboard._chart_svg(fund, bench)
+
+
+def test_buyers_text_names_buyers_and_sellers_and_ignores_missing_values():
+    import trade_cards as tc
+    buyers = pd.DataFrame({"asset": ["ETN", "ETN"], "period_end": pd.to_datetime(["2026-03-31", "2026-06-30"]),
+                           "available_date": pd.to_datetime(["2026-05-16", "2026-08-15"]),
+                           "n_managers": [50, 50], "n_buyers": [1, 3], "n_sellers": [0, 2],
+                           "top_buyers": ["A", "Ars, Cibc, Bard"],
+                           "buyers_detail": ["A (+5% d'actions)", "Bard Associates (+155% d'actions)"],
+                           "sellers_detail": [np.nan, "Burns Matteson (a tout vendu)"]})
+    text = tc._buyers_text(buyers, "ETN", pd.Timestamp("2026-09-01"))
+    assert "Qui achète : Bard Associates (+155% d'actions)" in text and "Qui vend : Burns Matteson" in text
+    early = tc._buyers_text(buyers, "ETN", pd.Timestamp("2026-06-01"))  # seul le 1er trimestre est publié
+    assert "A (+5% d'actions)" in early and "nan" not in early and "Qui vend" not in early

@@ -106,6 +106,27 @@ def _chart_svg(equity: pd.Series, bench: pd.Series, extra: Optional[pd.Series] =
 </svg>"""
 
 
+SIZING = {  # ce que la décision demande de faire sur la ligne, pour le calculateur de la fiche
+    "ENTRY": "buy", "ADD_REACCUMULATION": "add", "REDUCE_DISTRIBUTION_ALERT": "half", "RISK_DRAWDOWN": "half",
+    "EXIT_DISTRIBUTION_CONFIRMED": "sell", "EXIT_INSTITUTIONAL_LIQUIDATION": "sell", "RISK_STOP": "sell",
+    "RISK_TRIM": "trim",
+}
+
+
+def _sizing_html(card: tc.TradeCard) -> str:
+    """Calculateur « combien acheter ou vendre » ; les montants sont calculés dans la page (SCRIPT)."""
+    mode = SIZING.get(card.action)
+    if mode is None:
+        return ""
+    key = esc(f"{card.asset}-{card.date:%Y%m%d}")
+    return f"""<div class="sizing" data-mode="{mode}" data-key="{key}">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans {esc(card.asset)} : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans {esc(card.asset)} en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>"""
+
+
 def _card_html(card: tc.TradeCard) -> str:
     kind = CHIP.get(card.title.split(" ")[0], "warn")
     reasons = "".join(f"<li>{esc(r)}</li>" for r in card.reasons)
@@ -118,6 +139,7 @@ def _card_html(card: tc.TradeCard) -> str:
   <ul class="reasons">{reasons}</ul>
   <p class="history"><span class="label">Historique</span>{esc(card.history)}</p>
   <p class="status"><span class="label">Aujourd'hui</span>{esc(card.status)}</p>
+  {_sizing_html(card)}
 </article>"""
 
 
@@ -326,6 +348,12 @@ h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: 0.06em; colo
 .chip.warn { background: var(--warn-bg); color: var(--warn); }
 .reasons { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 0.92rem; }
 .history, .status { margin: 0; font-size: 0.92rem; display: grid; gap: 2px; }
+.portfolio-form, .sizing { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--neutral-bg); }
+.portfolio-form label, .sizing label { font-size: 0.9rem; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.portfolio-form input, .sizing input { font: 0.95rem var(--mono); width: 8.5em; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--surface); color: var(--ink); }
+.advice { margin: 0; font-weight: 600; font-size: 0.95rem; }
+.advice:empty { display: none; }
 .alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .alert { border-top: 1px solid var(--line); padding-top: 10px; }
 .alert:first-child { border-top: 0; padding-top: 0; }
@@ -352,6 +380,61 @@ footer { color: var(--muted); font-size: 0.82rem; }
 SCRIPT = """
 <script>
 (function () {
+  // Calculateur : montants en euros à acheter ou vendre, selon le portefeuille saisi par le lecteur.
+  var root = document.getElementById('mon-portefeuille');
+  if (root) {
+    var weight = parseFloat(root.getAttribute('data-weight')) || 0;
+    var part = parseFloat(root.getAttribute('data-partial')) || 0.5;
+    var total = document.getElementById('pf-total'), invested = document.getElementById('pf-invested');
+    var fmt = new Intl.NumberFormat('fr-FR', {style: 'currency', currency: 'EUR', maximumFractionDigits: 0});
+    function load(k) { try { return localStorage.getItem('desk.' + k); } catch (e) { return null; } }
+    function save(k, v) { try { localStorage.setItem('desk.' + k, v); } catch (e) {} }
+    function num(el) { var v = parseFloat(String(el.value).replace(',', '.')); return isFinite(v) && v > 0 ? v : 0; }
+    total.value = load('total') || '';
+    invested.value = load('invested') || '';
+    var boxes = document.querySelectorAll('.sizing');
+    boxes.forEach(function (box) {
+      var held = box.querySelector('.held'), stored = load('held.' + box.getAttribute('data-key'));
+      if (stored !== null) held.value = stored;
+      held.addEventListener('input', function () { save('held.' + box.getAttribute('data-key'), held.value); update(); });
+    });
+    function update() {
+      var V = num(total), I = Math.min(num(invested), V), free = V - I, target = weight * V;
+      document.getElementById('pf-summary').textContent = V > 0
+        ? 'Une ligne pleine = ' + fmt.format(target) + ' (' + (weight * 100).toFixed(1).replace('.', ',') +
+          ' % du portefeuille). Disponible pour acheter : ' + fmt.format(free) + '.'
+        : 'Indiquez la valeur de votre portefeuille pour voir les montants.';
+      boxes.forEach(function (box) {
+        var mode = box.getAttribute('data-mode'), out = box.querySelector('.advice'), heldEl = box.querySelector('.held');
+        if (V <= 0) { out.textContent = ''; return; }
+        var defaultHeld = mode === 'buy' ? 0 : (mode === 'add' ? target * part : (mode === 'trim' ? target * 1.5 : target));
+        heldEl.placeholder = Math.round(defaultHeld);
+        var held = heldEl.value === '' ? defaultHeld : num(heldEl), text;
+        if (mode === 'buy' || mode === 'add') {
+          var need = Math.max(0, target - held);
+          text = need <= 0 ? 'Ligne déjà pleine (' + fmt.format(held) + ') : rien à acheter.'
+            : (mode === 'buy' ? 'Achetez ' : 'Renforcez de ') + fmt.format(need) +
+              ' pour arriver à ' + fmt.format(target) + '.';
+          if (need > free + 0.5) {
+            text += free > 0 ? ' Vous n’avez que ' + fmt.format(free) + ' disponibles : prenez les ' +
+              fmt.format(need - free) + ' manquants sur votre part placée dans le S&P 500 (le fonds y place l’argent non investi), ou limitez-vous à ' + fmt.format(free) + '.'
+              : ' Rien n’est disponible : vendez ' + fmt.format(need) + ' de votre part placée dans le S&P 500 pour financer cet achat.';
+          }
+        } else if (mode === 'half') {
+          text = 'Vendez la moitié de la ligne : ' + fmt.format(held * part) + ' (gardez ' + fmt.format(held - held * part) + ').';
+        } else if (mode === 'trim') {
+          text = 'Vendez ' + fmt.format(Math.max(0, held - target)) + ' pour ramener la ligne à ' + fmt.format(target) + '.';
+        } else {
+          text = 'Vendez toute la ligne : ' + fmt.format(held) + '.';
+        }
+        out.textContent = text;
+      });
+    }
+    [total, invested].forEach(function (el) {
+      el.addEventListener('input', function () { save(el.id === 'pf-total' ? 'total' : 'invested', el.value); update(); });
+    });
+    update();
+  }
   var buttons = document.querySelectorAll('.filters button');
   buttons.forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -379,6 +462,9 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
                      synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
                      benchmark_label: str = "univers équipondéré", live=None, live_start: Optional[str] = None,
                      extra_html: str = "", pelosi: Optional[pd.Series] = None) -> str:
+    cfg = result.config
+    line_weight = min(cfg.max_weight, 1.0 / cfg.max_positions) if cfg.sizing == "equal" else cfg.max_weight
+    partial = cfg.partial_exit_fraction
     """`benchmark` : indice de comparaison (S&P 500 via SPY sur données réelles) ; à défaut,
     l'univers équipondéré du moteur, qui hérite du biais du survivant de l'univers."""
     m, b = result.metrics, result.benchmark_metrics
@@ -420,6 +506,12 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
   <div class="main">
     <section class="panel" aria-label="Dernières décisions">
       <h2>Dernières décisions · backtest</h2>
+      <div class="portfolio-form" id="mon-portefeuille" data-weight="{line_weight:.6f}" data-partial="{partial:.3f}">
+        <label>Valeur totale de mon portefeuille : <input type="number" id="pf-total" min="0" step="100" inputmode="decimal" placeholder="2000"> €</label>
+        <label>Dont déjà investi : <input type="number" id="pf-invested" min="0" step="100" inputmode="decimal" placeholder="1200"> €</label>
+        <p class="note" id="pf-summary">Indiquez la valeur de votre portefeuille pour voir les montants.</p>
+        <p class="note">Règle du fonds : {round(1 / line_weight) if line_weight else 12} lignes de même poids ; un allègement vend la moitié de la ligne, une vente la totalité. Vos montants restent dans votre navigateur.</p>
+      </div>
       <div class="filters" role="group" aria-label="Filtrer les décisions">
         <button type="button" id="f-all" data-filter="all" aria-pressed="true">Toutes</button>
         <button type="button" id="f-buy" data-filter="buy" aria-pressed="false">Achats</button>

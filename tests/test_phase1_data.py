@@ -433,3 +433,10 @@ def test_session_window_is_explicit_and_avoids_the_last_15_minutes():
     assert w == {"start": "2026-09-22T08:00:00Z", "end": "2026-09-23T00:00:00Z"}  # 4 h -> 20 h à New York
     w = p1.session_window(pd.Timestamp("2026-09-23"), now=pd.Timestamp("2026-09-23T20:30:00Z"))
     assert w["end"] == "2026-09-23T20:14:00Z"
+
+
+def test_manager_move_text():
+    names = {"1": "BARD ASSOCIATES INC"}
+    assert "nouvelle position" in p1._move_text(names, "1", 0, 100)
+    assert "a tout vendu" in p1._move_text(names, "1", 100, 0)
+    assert "+155% d'actions" in p1._move_text(names, "1", 100, 255)

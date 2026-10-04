@@ -734,8 +734,18 @@ def pretty_name(name: str) -> str:
     return " ".join(w.capitalize() if w.isupper() else w for w in kept).strip(" ,")
 
 
+def _move_text(names: dict, cik, prev: float, cur: float) -> str:
+    """« Nom (+45 % d'actions) », « Nom (nouvelle position) », « Nom (a tout vendu) »."""
+    name = pretty_name(names.get(str(cik), ""))
+    if prev <= 0:
+        return f"{name} (nouvelle position)"
+    if cur <= 0:
+        return f"{name} (a tout vendu)"
+    return f"{name} ({cur / prev - 1:+.0%} d'actions)"
+
+
 def smart_money_buyers(positions: pd.DataFrame, selection: pd.DataFrame, names: Optional[dict] = None,
-                       statutory_lag_days: int = 45, top: int = 3) -> pd.DataFrame:
+                       statutory_lag_days: int = 45, top: int = 3, detail: int = 5) -> pd.DataFrame:
     """Pour chaque action et chaque trimestre : combien de gérants de la liste ont acheté ou vendu,
     et les principaux acheteurs. Les actions sont déjà corrigées des divisions ; la donnée n'est
     utilisable qu'après l'échéance légale de publication (fin de trimestre + 45 jours + 1)."""
@@ -757,12 +767,19 @@ def smart_money_buyers(positions: pd.DataFrame, selection: pd.DataFrame, names: 
             else:
                 order = buyers.sort_values("delta", ascending=False).index
             top_names = [pretty_name(names.get(str(cik), "")) for cik, _ in list(order)[:top]]
+            sellers = grp[grp["delta"] < 0].assign(rel=lambda d: d["delta"] / d["prev"].where(d["prev"] > 0))
+            sellers = sellers.sort_values("delta")  # les plus grosses ventes (en actions) d'abord
             rows.append({
                 "asset": asset, "period_end": q,
                 "available_date": pd.Timestamp(q) + pd.Timedelta(days=statutory_lag_days + 1),
                 "n_managers": len(managers), "n_buyers": int((grp["delta"] > 0).sum()),
                 "n_sellers": int((grp["delta"] < 0).sum()),
                 "top_buyers": ", ".join(n for n in top_names if n),
+                "buyers_detail": "; ".join(_move_text(names, cik, r.prev, r.cur)
+                                           for (cik, _), r in buyers.loc[list(order)[:detail]].iterrows()
+                                           if names.get(str(cik))),
+                "sellers_detail": "; ".join(_move_text(names, cik, r.prev, r.cur)
+                                            for (cik, _), r in sellers.head(3).iterrows() if names.get(str(cik))),
             })
     return pd.DataFrame(rows)
 

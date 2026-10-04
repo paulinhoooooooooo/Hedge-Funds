@@ -168,9 +168,17 @@ def _buyers_text(buyers: Optional[pd.DataFrame], asset: str, date: pd.Timestamp)
     last = known.sort_values("period_end").iloc[-1]
     text = (f"Sur le trimestre arrêté au {pd.Timestamp(last['period_end']):%d/%m/%Y} : {int(last['n_buyers'])} des "
             f"{int(last['n_managers'])} meilleurs gérants suivis ont acheté, {int(last['n_sellers'])} ont vendu.")
-    names = str(last.get("top_buyers", "") or "").strip()
+    def field(name: str) -> str:
+        value = last.get(name, "") if name in last else ""
+        return "" if pd.isna(value) else str(value).strip()
+
+    detail = field("buyers_detail")
+    names = detail or field("top_buyers")
     if names:
-        text += f" Principaux acheteurs : {names}."
+        text += f" Qui achète : {names}."
+    sellers = field("sellers_detail")
+    if sellers:
+        text += f" Qui vend : {sellers}."
     return text
 
 
@@ -208,7 +216,9 @@ def build_trade_cards(result, n: int = 12, buyers: Optional[pd.DataFrame] = None
         io, pe = sig.io_change.iat[i, j], sig.io_period_end.iat[i, j]
         if np.isfinite(io):
             verb = "augmenté" if io > 0 else "réduit"
-            reasons.append(f"Les gérants de référence ont {verb} leurs positions de {abs(io):.1%} "
+            reasons.append(f"Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis "
+                           f"chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, {verb} leurs "
+                           f"positions de {abs(io):.1%} "
                            f"{HOLDING_WORDS.get(cls, '(')} arrêtées au {pd.Timestamp(pe):%d/%m/%Y}, déjà publiées).")
         bt = _buyers_text(buyers, asset, date)
         if bt:
