@@ -95,11 +95,15 @@ Chaque fiche doit montrer, sur données réelles, le nombre d'acheteurs et de ve
   jour). Une soirée manquée est rattrapée le lendemain ; un jour férié n'annonce rien.
 - **Pelosi** : une déclaration pas encore en ligne ou illisible est signalée (lien) et retentée.
 
-Tâches programmées (réglages Claude → Routines), notifications sur le téléphone ET par e-mail :
-- « Fonds — mise à jour du soir » : lundi → vendredi, 22 h UTC (18 h à New York) ; republie la page Desk
-  seulement si la mise à jour est complète ; toute anomalie commence par « ⚠️ ».
-- « Fonds — contrôle du matin » : mardi → samedi, 6 h UTC ; alerte si la page n'a pas été mise à jour
-  dans la nuit (panne, limite d'utilisation atteinte…).
+Notifications : application gratuite **ntfy** (`backtest/notifier.py`). Le nom du sujet est secret : il
+n'est jamais écrit dans ce dépôt public, il est passé par la variable `NTFY_TOPIC` dans les tâches
+programmées. Chaque mise à jour envoie son résumé (mouvements, ou « aucun mouvement », ou « ⚠️ »).
+
+Tâches programmées (réglages Claude → Routines) :
+- « Fonds — mise à jour du matin » : mardi → samedi, 6 h 30 UTC (séance de la veille à New York) ;
+  republie la page Desk seulement si la mise à jour est complète, puis envoie la notification.
+- « Fonds — contrôle de midi » : mardi → samedi, 11 h UTC ; envoie une alerte ntfy si la page n'a pas
+  été mise à jour le matin (panne, crédits épuisés…).
 
 Ce dont la chaîne dépend (à ne pas changer sans prévenir) : la branche `claude/sharp-pasteur-rnlt5h`,
 les réglages de l'environnement (`SEC_CONTACT_EMAIL`, `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`),

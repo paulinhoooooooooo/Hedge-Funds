@@ -44,10 +44,12 @@ import dashboard  # noqa: E402
 import flow_backtest as fb  # noqa: E402
 import phase1_data as p1  # noqa: E402
 import smart_money as sm  # noqa: E402
+import notifier  # noqa: E402
 
 STAGES = ["sec", "universe", "figi", "sectors", "prices", "finra", "cot", "ats", "short", "events",
           "insiders", "alpaca", "build", "names", "buyers"]
 OUT = p1.ROOT / "outputs"
+DESK_URL = "https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9"
 PAGE = OUT / "desk_smart_money.html"
 MAX_STALE_DAYS = 4  # un week-end prolongé d'un jour férié ; au-delà, les cours ne sont plus à jour
 STATE_TAG = re.compile(r'<script type="application/json" id="etat-desk">(.*?)</script>', re.S)
@@ -202,6 +204,10 @@ def write_outputs(text: str, complete: bool, reasons: list[str]) -> None:
         {"complet": complete, "problemes": reasons, "genere_le": pd.Timestamp.now(tz="UTC").isoformat()},
         ensure_ascii=False, indent=1), encoding="utf-8")
     print(text, flush=True)
+    first = text.splitlines()[0].lstrip("# ").strip() if text.strip() else "Fonds"
+    body = "\n".join(text.splitlines()[1:]).strip()
+    sent = notifier.send(first, body, urgent=not complete or "⚠" in text, click=DESK_URL)
+    print("Notification envoyée sur le téléphone." if sent else "Notification téléphone non envoyée (NTFY_TOPIC absent ?).")
 
 
 # =============================================================================
