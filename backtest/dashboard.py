@@ -48,20 +48,12 @@ def _pct(x: float, digits: int = 1, signed: bool = True) -> str:
     return (f"{x:+.{digits}%}" if signed else f"{x:.{digits}%}").replace(".", ",")
 
 
-def _chart_svg(equity: pd.Series, bench: pd.Series, extra: Optional[pd.Series] = None) -> str:
-    """Courbe base 100 du fonds (bleu), du marché (gris) et, si fournie, d'une troisième série (copie
-    Pelosi, orange) qui démarre plus tard au niveau du fonds ce jour-là ; étiquettes aux extrémités."""
+def _chart_svg(equity: pd.Series, bench: pd.Series) -> str:
+    """Courbe base 100 du fonds (bleu) et du marché (gris), échelle linéaire, étiquettes aux extrémités."""
     s = (equity / equity.iloc[0] * 100).resample("W").last().dropna()
     b = (bench / bench.iloc[0] * 100).resample("W").last().reindex(s.index).ffill()
-    p = None
-    if extra is not None and len(extra.dropna()):
-        e = extra.dropna().resample("W").last().dropna()
-        e = e[e.index >= s.index[0]]
-        if len(e):
-            p = (e / e.iloc[0] * s.asof(e.index[0])).reindex(s.index)
     w, h, left, right, top, bottom = 640, 200, 44, 70, 12, 26
-    values = [s, b] + ([p.dropna()] if p is not None else [])
-    lo, hi = float(min(v.min() for v in values)), float(max(v.max() for v in values))
+    lo, hi = float(min(s.min(), b.min())), float(max(s.max(), b.max()))
     step = 50 if hi - lo > 150 else 25
     y0, y1 = step * np.floor(lo / step), step * np.ceil(hi / step)
 
@@ -81,28 +73,16 @@ def _chart_svg(equity: pd.Series, bench: pd.Series, extra: Optional[pd.Series] =
         grid.append(f'<text x="{x(i):.1f}" y="{h - 6}" class="axis" text-anchor="middle">{yr}</text>')
 
     def path(series):
-        return " ".join(f"{'M' if k == 0 else 'L'}{x(i):.1f},{y(v):.1f}"
-                        for k, (i, v) in enumerate((i, v) for i, v in enumerate(series.to_numpy()) if np.isfinite(v)))
+        return " ".join(f"{'M' if i == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for i, v in enumerate(series.to_numpy()))
 
     end = len(s) - 1
-    # Étiquettes de fin : écartées d'au moins 12 px pour rester lisibles
-    labels = [("fund", s.iloc[-1]), ("bench", b.iloc[-1])] + ([("pelosi", p.iloc[-1])] if p is not None else [])
-    labels.sort(key=lambda t: y(t[1]))
-    ys, last_y = {}, -1e9
-    for name, v in labels:
-        last_y = max(y(v) + 4, last_y + 12)
-        ys[name] = last_y
-    extra_svg = "" if p is None else (
-        f'<path d="{path(p)}" class="line-pelosi"/>'
-        f'<text x="{x(end) + 8:.1f}" y="{ys["pelosi"]:.1f}" class="end-label pelosi">{p.iloc[-1]:.0f}</text>')
     return f"""<svg viewBox="0 0 {w} {h}" role="img" aria-label="Valeur du fonds et du marché, base 100">
   {''.join(grid)}
   <path d="{path(b)}" class="line-bench"/>
-  {extra_svg}
   <path d="{path(s)}" class="line-fund"/>
   <circle cx="{x(end):.1f}" cy="{y(s.iloc[-1]):.1f}" r="3.5" class="dot-fund"/>
-  <text x="{x(end) + 8:.1f}" y="{ys["fund"]:.1f}" class="end-label">{s.iloc[-1]:.0f}</text>
-  <text x="{x(end) + 8:.1f}" y="{ys["bench"]:.1f}" class="end-label muted">{b.iloc[-1]:.0f}</text>
+  <text x="{x(end) + 8:.1f}" y="{y(s.iloc[-1]) + 4:.1f}" class="end-label">{s.iloc[-1]:.0f}</text>
+  <text x="{x(end) + 8:.1f}" y="{y(b.iloc[-1]) + 4:.1f}" class="end-label muted">{b.iloc[-1]:.0f}</text>
 </svg>"""
 
 
@@ -238,18 +218,6 @@ def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
 <tbody>{''.join(rows)}</tbody></table></div>"""
 
 
-def _pelosi_curve(path: Path) -> Optional[pd.Series]:
-    """Copie Pelosi (date de publication), à partir de sa première ligne détenue (backtest/pelosi.py)."""
-    column = "Copie Pelosi (date de publication)"
-    if not path.exists():
-        return None
-    curve = pd.read_csv(path, index_col=0, parse_dates=True).get(column)
-    if curve is None:
-        return None
-    moving = curve[curve.diff().abs() > 0]
-    return curve[curve.index >= moving.index[0] - pd.Timedelta(days=7)] if len(moving) else None
-
-
 def _pelosi_html(folder: Path) -> str:
     """Comparaison avec la copie des transactions déclarées de Nancy Pelosi (backtest/pelosi.py)."""
     table = folder / "comparaison.csv"
@@ -281,7 +249,7 @@ def _pelosi_html(folder: Path) -> str:
 CSS = """
 :root {
   --bg: #f4f6f9; --surface: #ffffff; --ink: #121a24; --muted: #5a6573; --line: #dde3ea;
-  --accent: #2a78d6; --bench: #8a8f98; --pelosi: #c2580a; --buy: #147a47; --buy-bg: #e3f3ea; --sell: #b8352a; --sell-bg: #fbe7e4;
+  --accent: #2a78d6; --bench: #8a8f98; --buy: #147a47; --buy-bg: #e3f3ea; --sell: #b8352a; --sell-bg: #fbe7e4;
   --warn: #9a5b00; --warn-bg: #fbefd9; --neutral-bg: #eceff3;
   --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -291,14 +259,14 @@ CSS = """
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #0e131a; --surface: #151c25; --ink: #e5eaf0; --muted: #98a3b1; --line: #263140;
-    --accent: #5b9bf0; --bench: #7d8590; --pelosi: #f59e4b; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
+    --accent: #5b9bf0; --bench: #7d8590; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
     --warn: #f0b04a; --warn-bg: #36280e; --neutral-bg: #1e2733;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #0e131a; --surface: #151c25; --ink: #e5eaf0; --muted: #98a3b1; --line: #263140;
-  --accent: #5b9bf0; --bench: #7d8590; --pelosi: #f59e4b; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
+  --accent: #5b9bf0; --bench: #7d8590; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
   --warn: #f0b04a; --warn-bg: #36280e; --neutral-bg: #1e2733;
 }
 body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
@@ -321,15 +289,12 @@ h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: 0.06em; colo
 .axis { fill: var(--muted); font: 11px var(--mono); }
 .line-fund { fill: none; stroke: var(--accent); stroke-width: 2.2; }
 .line-bench { fill: none; stroke: var(--bench); stroke-width: 1.4; }
-.line-pelosi { fill: none; stroke: var(--pelosi); stroke-width: 1.6; }
-.end-label.pelosi { fill: var(--pelosi); }
 .dot-fund { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
 .end-label { fill: var(--ink); font: 600 12px var(--mono); }
 .end-label.muted { fill: var(--muted); font-weight: 400; }
 .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.85rem; color: var(--muted); }
 .legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--accent); }
 .legend span.bench::before { background: var(--bench); }
-.legend span.pelosi::before { background: var(--pelosi); }
 .main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .side { display: grid; gap: 20px; }
 @media (max-width: 860px) { .main { grid-template-columns: 1fr; } }
@@ -461,7 +426,7 @@ def _invested_text(result) -> str:
 def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], cot: Optional[pd.DataFrame],
                      synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
                      benchmark_label: str = "univers équipondéré", live=None, live_start: Optional[str] = None,
-                     extra_html: str = "", pelosi: Optional[pd.Series] = None) -> str:
+                     extra_html: str = "") -> str:
     cfg = result.config
     line_weight = min(cfg.max_weight, 1.0 / cfg.max_positions) if cfg.sizing == "equal" else cfg.max_weight
     partial = cfg.partial_exit_fraction
@@ -499,8 +464,8 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
   {f'<section class="panel" aria-label="Portefeuille réel"><h2>Portefeuille réel · depuis le {pd.Timestamp(live_start):%d/%m/%Y}</h2>{_live_html(live, benchmark, live_start)}</section>' if live is not None else ''}
   <section class="panel chart" aria-label="Courbe du fonds">
     <h2>Backtest depuis 2016 · le fonds face au marché</h2>
-    {_chart_svg(result.equity, bench, pelosi)}
-    <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché ({esc(benchmark_label)})</span>{'<span class="pelosi">Copie Nancy Pelosi (depuis sept. 2018, au niveau du fonds ce jour-là)</span>' if pelosi is not None else ''}</div>
+    {_chart_svg(result.equity, bench)}
+    <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché ({esc(benchmark_label)})</span></div>
   </section>
   {extra_html}
   <div class="main">
@@ -583,14 +548,12 @@ def main(argv: Optional[list[str]] = None) -> Path:
         spy = pd.read_csv(spy_path, parse_dates=["date"]).set_index("date")["adjClose"]
         spy.index = pd.DatetimeIndex(spy.index).tz_localize(None) if spy.index.tz is not None else spy.index
         benchmark, bench_label = spy, "S&P 500 · SPY"
-    live = extra = pelosi_curve = None
+    live = extra = None
     if not synthetic:
         live = fb.run_backtest(data, replace(cfg, trading_start=sm.LIVE_START))
         extra = _pelosi_html(ROOT / "outputs" / "pelosi")
-        pelosi_curve = _pelosi_curve(ROOT / "outputs" / "pelosi" / "courbes.csv")
     out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label,
-                                    live=live, live_start=sm.LIVE_START, extra_html=extra or "",
-                                    pelosi=pelosi_curve),
+                                    live=live, live_start=sm.LIVE_START, extra_html=extra or ""),
                    encoding="utf-8")
     print(f"Page écrite : {out}")
     return out
