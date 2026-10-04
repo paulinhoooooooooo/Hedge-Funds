@@ -3,8 +3,9 @@ import urllib.error  # noqa: F401
 import notifier
 
 
-def test_no_topic_means_no_network_call(monkeypatch):
+def test_no_topic_means_no_network_call(monkeypatch, tmp_path):
     monkeypatch.delenv("NTFY_TOPIC", raising=False)
+    monkeypatch.setattr(notifier, "TOPIC_FILE", tmp_path / "absent.txt")
     called = []
     monkeypatch.setattr(notifier.urllib.request, "urlopen", lambda *a, **k: called.append(a))
     assert notifier.send("Fonds", "texte") is False and not called
@@ -64,3 +65,22 @@ def test_quota_refusal_is_retried(monkeypatch):
 
     monkeypatch.setattr(notifier.urllib.request, "urlopen", flaky)
     assert notifier.send("Fonds", "texte", topic="x", retries=5, wait=0) is True and len(calls) == 3
+
+
+def test_topic_can_come_from_the_untracked_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("NTFY_TOPIC", raising=False)
+    (tmp_path / "t.txt").write_text("sujet-du-fichier\n", encoding="utf-8")
+    monkeypatch.setattr(notifier, "TOPIC_FILE", tmp_path / "t.txt")
+    urls = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(notifier.urllib.request, "urlopen", lambda req, timeout: urls.append(req.full_url) or Resp())
+    assert notifier.send("Fonds", "texte") and urls == ["https://ntfy.sh/sujet-du-fichier"]

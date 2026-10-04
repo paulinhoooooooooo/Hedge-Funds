@@ -5,7 +5,8 @@ notifier.py — Notifications sur le téléphone des fondateurs (application gra
 
 Le fonds publie ses messages sur un « sujet » ntfy (https://ntfy.sh) ; les fondateurs s'y abonnent dans
 l'application ntfy (iPhone / Android), sans compte. Le nom du sujet est SECRET : il n'est jamais écrit
-dans le dépôt (public) ; il est transmis par la variable d'environnement NTFY_TOPIC.
+dans le dépôt (public) ; il est lu dans la variable d'environnement NTFY_TOPIC, sinon dans le fichier
+outputs/ntfy_topic.txt (dossier exclu de git).
 
     NTFY_TOPIC=... python backtest/notifier.py "Titre" "Message"
 """
@@ -17,6 +18,7 @@ import os
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
 SERVER = "https://ntfy.sh"
 MAX_BYTES = 3900  # ntfy accepte 4 096 octets par message
@@ -27,10 +29,21 @@ def _header(value: str) -> str:
     return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
 
 
+TOPIC_FILE = Path(__file__).resolve().parents[1] / "outputs" / "ntfy_topic.txt"  # outputs/ : jamais versionné
+
+
+def _topic_from_file() -> str:
+    """Sujet secret rangé hors du dépôt (outputs/ est exclu de git), si NTFY_TOPIC n'est pas défini."""
+    try:
+        return TOPIC_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def send(title: str, message: str, urgent: bool = False, topic: str | None = None,
          click: str | None = None, retries: int = 6, wait: float = 20.0) -> bool:
     """Envoie la notification ; renvoie False (sans lever d'erreur) si aucun sujet ou en cas d'échec."""
-    topic = (topic or os.environ.get("NTFY_TOPIC", "")).strip()
+    topic = (topic or os.environ.get("NTFY_TOPIC", "") or _topic_from_file()).strip()
     if not topic:
         return False
     body = message.encode("utf-8")
