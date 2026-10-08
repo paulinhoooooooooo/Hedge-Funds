@@ -51,6 +51,7 @@ STAGES = ["sec", "universe", "figi", "sectors", "prices", "finra", "cot", "ats",
 OUT = p1.ROOT / "outputs"
 DESK_URL = "https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9"
 PAGE = OUT / "desk_smart_money.html"
+STAGE_TIMEOUT = 50 * 60  # une étape bloquée ne doit pas consommer tout le temps du job
 MAX_STALE_DAYS = 4  # un week-end prolongé d'un jour férié ; au-delà, les cours ne sont plus à jour
 STATE_TAG = re.compile(r'<script type="application/json" id="etat-desk">(.*?)</script>', re.S)
 PTR_LINK = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{doc}.pdf"
@@ -98,8 +99,11 @@ def run_stages(block_days: int, retry_wait: float = 120.0) -> list[str]:
         cmd = [sys.executable, str(HERE / "phase1_data.py"), stage, "--block-days", str(block_days)]
         for attempt in (1, 2):
             print(f"=== {stage} (essai {attempt}) ===", flush=True)
-            if subprocess.run(cmd).returncode == 0:
-                break
+            try:
+                if subprocess.run(cmd, timeout=STAGE_TIMEOUT).returncode == 0:
+                    break
+            except subprocess.TimeoutExpired:
+                print(f"=== {stage} : délai de {STAGE_TIMEOUT // 60} min dépassé ===", flush=True)
             if attempt == 1:
                 time.sleep(retry_wait)
         else:

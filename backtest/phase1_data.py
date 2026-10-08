@@ -215,7 +215,15 @@ class Http:
             req = urllib.request.Request(url, data=data, headers={**self.headers, **(headers or {})}, method=method)
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
-                    return resp.read()
+                    # Lecture par morceaux : le délai de 120 s ne vaut que par appel réseau, un serveur
+                    # qui distille ses octets pourrait sinon bloquer indéfiniment.
+                    deadline = time.monotonic() + 300
+                    chunks = []
+                    while chunk := resp.read(64 * 1024):
+                        chunks.append(chunk)
+                        if time.monotonic() > deadline:
+                            raise TimeoutError(f"téléchargement trop long (> 300 s) : {url}")
+                    return b"".join(chunks)
             except urllib.error.HTTPError as err:
                 body = err.read().decode("utf-8", "replace") if err.fp else ""
                 if err.code in (429, 500, 502, 503, 504) and attempt < self.retries:
