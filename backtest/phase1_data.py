@@ -64,6 +64,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
@@ -223,7 +224,13 @@ class Http:
                         chunks.append(chunk)
                         if time.monotonic() > deadline:
                             raise TimeoutError(f"téléchargement trop long (> 300 s) : {url}")
-                    return b"".join(chunks)
+                    body = b"".join(chunks)
+                    # read(n) ne signale pas une connexion coupée en route (contrairement à read()) :
+                    # on compare à la taille annoncée, sinon une archive tronquée serait gardée.
+                    expected = resp.headers.get("Content-Length")
+                    if expected and expected.isdigit() and len(body) < int(expected):
+                        raise http.client.IncompleteRead(body, int(expected) - len(body))
+                    return body
             except urllib.error.HTTPError as err:
                 body = err.read().decode("utf-8", "replace") if err.fp else ""
                 if err.code in (429, 500, 502, 503, 504) and attempt < self.retries:
@@ -315,10 +322,22 @@ def stage_sec(http: Optional[Http] = None, keep_zips: bool = False) -> None:
         if done.exists():
             continue
         zpath = raw / f"{name}.zip"
+        if zpath.exists() and not zipfile.is_zipfile(zpath):  # archive abîmée d'un passage précédent
+            print(f"[{k}/{len(urls)}] {name} : archive illisible, nouveau téléchargement")
+            zpath.unlink()
         if not zpath.exists():
             print(f"[{k}/{len(urls)}] téléchargement {name}")
-            zpath.write_bytes(http.get(url))
-        rows, stats = process_13f_zip(zpath)
+            payload = http.get(url)
+            if not payload.startswith(b"PK"):
+                raise ValueError(f"{name} : la SEC n'a pas renvoyé une archive zip")
+            part = zpath.with_suffix(".part")
+            part.write_bytes(payload)
+            part.replace(zpath)  # le fichier n'apparaît qu'une fois complet
+        try:
+            rows, stats = process_13f_zip(zpath)
+        except (zipfile.BadZipFile, EOFError, zlib.error):
+            zpath.unlink(missing_ok=True)  # l'essai suivant de l'étape la retélécharge
+            raise
         stats.to_parquet(inter / f"{name}.managers.parquet", index=False)
         rows.to_parquet(done, index=False)
         print(f"[{k}/{len(urls)}] {name} : {len(rows):,} lignes, {stats['cik'].nunique():,} gérants")

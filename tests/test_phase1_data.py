@@ -440,3 +440,46 @@ def test_manager_move_text():
     assert "nouvelle position" in p1._move_text(names, "1", 0, 100)
     assert "a tout vendu" in p1._move_text(names, "1", 100, 0)
     assert "+155% d'actions" in p1._move_text(names, "1", 100, 255)
+
+
+# ---------------------------------------------------------------------------
+# Téléchargements coupés en route
+# ---------------------------------------------------------------------------
+
+class _Resp:
+    def __init__(self, body, length):
+        self._body, self.headers = io.BytesIO(body), {"Content-Length": str(length)}
+
+    def read(self, n=-1):
+        return self._body.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_http_retries_a_download_cut_before_its_announced_size(monkeypatch):
+    answers = [_Resp(b"PK123", 10), _Resp(b"PK12345678", 10)]
+    monkeypatch.setattr(p1.urllib.request, "urlopen", lambda req, timeout: answers.pop(0))
+    monkeypatch.setattr(p1.time, "sleep", lambda s: None)
+    assert p1.Http(retries=2).get("https://example.org/a.zip") == b"PK12345678"
+    assert not answers
+
+
+def test_stage_sec_downloads_again_an_archive_left_corrupt(monkeypatch, tmp_path):
+    q = pd.Timestamp("2020-03-31")
+    make_13f_zip(tmp_path / "good.zip", [("A1", 1, "13F-HR", "2020-05-10", q)],
+                 [("A1", "111111111", "ALPHA", 100, 10)])
+    monkeypatch.setattr(p1, "DATA", tmp_path / "data")
+    url = "https://www.sec.gov/files/2020q1_form13f.zip"
+    monkeypatch.setattr(p1, "list_13f_zips", lambda http: [url])
+    raw = tmp_path / "data" / "sec" / "raw"
+    raw.mkdir(parents=True)
+    (raw / "2020q1_form13f.zip").write_bytes(b"PK\x03\x04 archive coupee")  # reste d'un passage précédent
+    http = FakeHttp({"2020q1_form13f": (tmp_path / "good.zip").read_bytes()})
+    p1.stage_sec(http)
+    assert http.calls == [url]
+    assert (tmp_path / "data" / "sec" / "intermediate" / "2020q1_form13f.rows.parquet").exists()
+    assert not list(raw.iterdir())  # archive traitée puis effacée, aucun fichier partiel
