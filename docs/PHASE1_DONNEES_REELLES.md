@@ -102,6 +102,18 @@ l'ordinateur lui-même (127.0.0.1).
 étape retentée une fois), portefeuille réel, copie Pelosi, page Desk, `outputs/notification.md` et
 `outputs/etat_mise_a_jour.json`.
 
+Dans une tâche programmée, la lancer **détachée** : elle dure 2 à 4 heures (le conteneur est vide,
+tout est retéléchargé), alors qu'une commande en arrière-plan de Claude Code est arrêtée au bout de
+2 heures au plus.
+
+```bash
+bash backtest/lancer_mise_a_jour.sh     # rend la main tout de suite (journal : outputs/mise_a_jour.log)
+bash backtest/attendre_mise_a_jour.sh   # 0 complète, 2 incomplète, 1 échec ; 3 = toujours en cours :
+                                        # relancer ce script d'attente, jamais la mise à jour
+```
+
+- **Téléchargements coupés en route** : une réponse plus courte que sa taille annoncée est refaite ;
+  une archive SEC abîmée laissée par un essai précédent est retéléchargée.
 - **Portefeuille réel** : démarré vide le 24/09/2026 (`smart_money.LIVE_START`) ; seuls les achats et
   renforcements décidés depuis y entrent ; le coupe-circuit de -20 % repart de zéro ce jour-là.
 - **Données manquantes ou cours périmés** : mise à jour déclarée incomplète, aucun mouvement annoncé,
