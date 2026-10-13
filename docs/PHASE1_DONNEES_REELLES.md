@@ -127,7 +127,14 @@ Notifications : application gratuite **ntfy** (`backtest/notifier.py`). Le nom d
 n'est jamais écrit dans ce dépôt public, il est passé par la variable `NTFY_TOPIC` dans les tâches
 programmées. Chaque mise à jour envoie son résumé (mouvements, ou « aucun mouvement », ou « ⚠️ »).
 
-Tâches programmées (réglages Claude → Routines) :
+**Depuis le 13/10/2026, le calcul quotidien tourne sur GitHub Actions** (`.github/workflows/fonds_mise_a_jour.yml`,
+présent aussi sur la branche principale du dépôt, seule à pouvoir le programmer) : mardi → samedi à 6 h 30 UTC,
+données gardées d'un passage à l'autre (cache), résumé ntfy envoyé par le programme, page déposée sur la
+branche `desk-page`. Secrets GitHub nécessaires : `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`,
+`SEC_CONTACT_EMAIL`, `NTFY_TOPIC`. La routine Claude « Fonds — publication de la page Desk » (9 h 45 et
+12 h 45 UTC) publie seulement cette page. Les routines Claude ne tenaient pas une tâche de 2 h 30.
+
+Anciennes tâches programmées (réglages Claude → Routines), remplacées ci-dessus :
 - « Fonds — mise à jour du matin » : mardi → samedi, 6 h 30 UTC (séance de la veille à New York) ;
   republie la page Desk seulement si la mise à jour est complète, puis envoie la notification.
 - « Fonds — contrôle de midi » : mardi → samedi, 11 h UTC ; envoie une alerte ntfy si la page n'a pas
