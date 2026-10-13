@@ -1,0 +1,101 @@
+# Mise à jour quotidienne du fonds, sur les serveurs gratuits de GitHub (dépôt public).
+# - Télécharge les données de la veille (gardées d'un passage à l'autre : quelques dizaines de minutes
+#   au lieu de 2 h 15 depuis zéro), relance le portefeuille réel et réécrit la page Desk.
+# - Envoie lui-même le résumé (ou l'alerte) sur le téléphone du fondateur (ntfy).
+# - Dépose la page complète sur la branche « desk-page » ; une courte routine Claude la publie ensuite
+#   sur https://claude.ai/artifact/6gUzpPqWQd6FEwMwn2pKz9 (seul Claude peut publier cette page).
+# Secrets à créer dans GitHub (Settings → Secrets and variables → Actions) :
+#   ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY, SEC_CONTACT_EMAIL, NTFY_TOPIC
+name: Fonds — mise à jour du matin
+
+on:
+  schedule:
+    - cron: "30 6 * * 2-6"  # mardi → samedi, 6 h 30 UTC : séance de la veille à New York
+  workflow_dispatch:
+
+permissions:
+  contents: write  # dépôt de la page sur la branche desk-page
+
+concurrency:
+  group: fonds-mise-a-jour
+  cancel-in-progress: false
+
+jobs:
+  mise-a-jour:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/sharp-pasteur-rnlt5h  # le code du fonds
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -q -r requirements.txt
+
+      - name: Clés présentes
+        run: |
+          line=$(python backtest/phase1_data.py status | tail -1)
+          echo "$line"
+          echo "$line" | grep -q "SEC_CONTACT_EMAIL défini" && echo "$line" | grep -q "ALPACA défini"
+
+      - name: Données des passages précédents
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: fonds-data-${{ github.run_id }}
+          restore-keys: fonds-data-
+
+      - name: Page de la veille (mouvements déjà annoncés)
+        run: |
+          mkdir -p outputs
+          if git fetch -q --depth 1 origin desk-page; then
+            git show FETCH_HEAD:desk_smart_money.html > outputs/page_veille.html
+          fi
+
+      - name: Mise à jour
+        id: maj
+        run: |
+          set +e
+          args=()
+          [ -s outputs/page_veille.html ] && args=(--etat outputs/page_veille.html)
+          python backtest/mise_a_jour.py "${args[@]}" 2>&1 | tee outputs/mise_a_jour.log
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Garder les données pour le prochain passage
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: fonds-data-${{ github.run_id }}
+
+      - name: Déposer la page sur la branche desk-page
+        if: steps.maj.outputs.code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$(mktemp -d)
+          cp outputs/desk_smart_money.html outputs/notification.md outputs/etat_mise_a_jour.json "$dir"/
+          cd "$dir"
+          git init -q -b desk-page
+          git add .
+          git -c user.name="fonds-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Page Desk générée le $(date -u '+%d/%m/%Y %H:%M') UTC"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" desk-page
+
+      - name: Alerte si le passage a échoué
+        if: failure() || steps.maj.outputs.code == ''
+        run: |
+          curl -s --retry 5 --retry-delay 20 -H "Title: Fonds - ALERTE" -H "Priority: high" -H "Tags: warning" \
+            -d "La mise a jour du fonds sur GitHub a echoue (passage ${GITHUB_RUN_ID}). La page Desk de la veille reste en place." \
+            "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true
