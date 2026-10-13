@@ -204,14 +204,16 @@ def notification(result: fb.BacktestResult, failed: list[str], spy: pd.Series,
 def write_outputs(text: str, complete: bool, reasons: list[str]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "notification.md").write_text(text, encoding="utf-8")
-    (OUT / "etat_mise_a_jour.json").write_text(json.dumps(
-        {"complet": complete, "problemes": reasons, "genere_le": pd.Timestamp.now(tz="UTC").isoformat()},
-        ensure_ascii=False, indent=1), encoding="utf-8")
     print(text, flush=True)
     first = text.splitlines()[0].lstrip("# ").strip() if text.strip() else "Fonds"
     body = "\n".join(text.splitlines()[1:]).strip()
+    # Le programme envoie lui-même le résumé (sujet : NTFY_TOPIC ou outputs/ntfy_topic.txt) : le fondateur
+    # est prévenu même si la session qui l'a lancé s'arrête avant la fin.
     sent = notifier.send(first, body, urgent=not complete or "⚠" in text, click=DESK_URL)
     print("Notification envoyée sur le téléphone." if sent else "Notification téléphone non envoyée (NTFY_TOPIC absent ?).")
+    (OUT / "etat_mise_a_jour.json").write_text(json.dumps(
+        {"complet": complete, "problemes": reasons, "genere_le": pd.Timestamp.now(tz="UTC").isoformat(),
+         "notification_envoyee": sent}, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 # =============================================================================

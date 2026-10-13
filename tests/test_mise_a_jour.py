@@ -85,5 +85,17 @@ def test_total_failure_is_reported_never_silent(tmp_path, monkeypatch):
     assert mj.main(["--skip-download"]) == 1
     text = (tmp_path / "outputs" / "notification.md").read_text(encoding="utf-8")
     assert "ÉCHEC" in text
-    assert '"complet": false' in (tmp_path / "outputs" / "etat_mise_a_jour.json").read_text(encoding="utf-8")
+    state = (tmp_path / "outputs" / "etat_mise_a_jour.json").read_text(encoding="utf-8")
+    assert '"complet": false' in state and '"notification_envoyee": false' in state
     assert not (tmp_path / "outputs" / "desk.html").exists()  # la page de la veille n'est pas remplacée
+
+
+def test_summary_is_sent_by_the_program_itself(tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mj.p1, "DATA", tmp_path / "vide")
+    monkeypatch.setattr(mj, "OUT", tmp_path / "outputs")
+    monkeypatch.setattr(mj, "PAGE", tmp_path / "outputs" / "desk.html")
+    monkeypatch.setattr(mj.notifier, "send", lambda title, body, **kw: sent.append((title, kw)) or True)
+    mj.main(["--skip-download"])
+    assert sent and sent[0][1]["urgent"] is True and "ÉCHEC" in sent[0][0]
+    assert '"notification_envoyee": true' in (tmp_path / "outputs" / "etat_mise_a_jour.json").read_text(encoding="utf-8")

@@ -12,6 +12,10 @@ while [ ! -f outputs/mise_a_jour.fin ]; do
     [ -f outputs/mise_a_jour.fin ] && break
     echo "La mise à jour s'est arrêtée sans finir. Fin du journal :"
     tail -5 outputs/mise_a_jour.log 2>/dev/null
+    # Alerte envoyée par le script lui-même (sujet ntfy : NTFY_TOPIC ou outputs/ntfy_topic.txt).
+    python backtest/notifier.py "⚠ Fonds — mise à jour arrêtée en route" \
+      "La mise à jour du matin s'est arrêtée avant la fin (dernière étape : $(grep '^===' outputs/mise_a_jour.log 2>/dev/null | tail -1)). La page Desk de la veille reste en place." \
+      > /dev/null 2>&1 || true
     exit 4
   fi
   if [ "$(date +%s)" -ge "$limit" ]; then
