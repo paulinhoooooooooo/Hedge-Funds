@@ -72,6 +72,13 @@ def test_new_pelosi_filings_use_seen_documents():
     assert list(fresh["ticker"]) == ["BE"]
 
 
+def test_session_still_open_in_new_york_is_not_closed():
+    day = pd.Timestamp("2026-10-13")
+    assert not mj.session_closed(day, pd.Timestamp("2026-10-13 15:10", tz="America/New_York"))
+    assert mj.session_closed(day, pd.Timestamp("2026-10-13 16:45", tz="America/New_York"))
+    assert mj.session_closed(day, pd.Timestamp("2026-10-14 03:00", tz="America/New_York"))
+
+
 def test_stale_prices_are_detected():
     now = pd.Timestamp("2026-09-24 18:00", tz="America/New_York")
     assert mj.stale_days(pd.Timestamp("2026-09-24"), now) == 0

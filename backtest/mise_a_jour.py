@@ -116,6 +116,14 @@ def stale_days(last: pd.Timestamp, now: Optional[pd.Timestamp] = None) -> int:
     return (now.tz_localize(None).normalize() - pd.Timestamp(last).normalize()).days
 
 
+def session_closed(last: pd.Timestamp, now: Optional[pd.Timestamp] = None) -> bool:
+    """La séance `last` est-elle terminée (cours définitifs) ? Une mise à jour lancée pendant la séance
+    de New York voit des cours provisoires : cette séance ne doit pas être notée comme signalée."""
+    now = now if now is not None else pd.Timestamp.now(tz="America/New_York")
+    local = now.tz_localize(None)
+    return pd.Timestamp(last).normalize() < local.normalize() or local.hour * 60 + local.minute >= 16 * 60 + 30
+
+
 # =============================================================================
 # Notification
 # =============================================================================
@@ -262,7 +270,10 @@ def main(argv: list[str] | None = None) -> int:
     text = notification(result, critical + warnings, spy, pelosi_new, state, pelosi_unreadable, complete)
     if complete:
         dashboard.main(["--data-dir", str(engine), "--out", str(PAGE)])
-        embed_state(PAGE, {"derniere_seance": f"{last:%Y-%m-%d}", "pelosi_docs": pelosi_docs,
+        # Séance en cours à New York : on note la précédente, pour que le passage suivant annonce
+        # les mouvements de celle-ci une fois ses cours définitifs.
+        reported = last if session_closed(last) or len(result.equity) < 2 else result.equity.index[-2]
+        embed_state(PAGE, {"derniere_seance": f"{reported:%Y-%m-%d}", "pelosi_docs": pelosi_docs,
                            "genere_le": pd.Timestamp.now(tz="UTC").isoformat(), "depart": sm.LIVE_START})
     write_outputs(text, complete, critical + warnings)
     return 0 if complete else 2
