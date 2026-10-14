@@ -10,7 +10,11 @@ name: Fonds — mise à jour du matin
 
 on:
   schedule:
-    - cron: "30 6 * * 2-6"  # mardi → samedi, 6 h 30 UTC : séance de la veille à New York
+    # Mardi → samedi, séance de la veille à New York. GitHub retarde ou saute parfois les horaires
+    # chargés (pile, demie) : minute décalée, plus un passage de secours qui s'arrête aussitôt si la
+    # page du jour est déjà faite.
+    - cron: "41 6 * * 2-6"
+    - cron: "17 8 * * 2-6"
   workflow_dispatch:
 
 permissions:
@@ -21,7 +25,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    outputs:
+      fait: ${{ steps.deja.outputs.fait }}
+    steps:
+      - name: Page du jour déjà faite ?
+        id: deja
+        run: |
+          fait=non
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            jour=$(curl -sf "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/desk-page/etat_mise_a_jour.json" \
+                   | python3 -c "import json,sys; print(json.load(sys.stdin)['genere_le'][:10])" || true)
+            [ "$jour" = "$(date -u +%F)" ] && fait=oui
+          fi
+          echo "fait=$fait" >> "$GITHUB_OUTPUT"
+          echo "Page du jour déjà faite : $fait"
+
   mise-a-jour:
+    needs: verifier
+    if: needs.verifier.outputs.fait != 'oui'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
