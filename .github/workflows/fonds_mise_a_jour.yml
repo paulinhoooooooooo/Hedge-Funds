@@ -10,11 +10,14 @@ name: Fonds — mise à jour du matin
 
 on:
   schedule:
-    # Mardi → samedi, séance de la veille à New York. GitHub retarde ou saute parfois les horaires
-    # chargés (pile, demie) : minute décalée, plus un passage de secours qui s'arrête aussitôt si la
-    # page du jour est déjà faite.
+    # Mardi → samedi (UTC), dans la nuit qui suit la séance de New York (clôture 20 h UTC).
+    # GitHub retarde souvent ses lancements programmés de plusieurs heures (constaté : 5 h 30) :
+    # plusieurs horaires de nuit, le premier qui démarre fait le calcul, les suivants s'arrêtent
+    # aussitôt (page du jour déjà faite).
+    - cron: "37 0 * * 2-6"
+    - cron: "53 2 * * 2-6"
+    - cron: "11 5 * * 2-6"
     - cron: "41 6 * * 2-6"
-    - cron: "17 8 * * 2-6"
   workflow_dispatch:
 
 permissions:
