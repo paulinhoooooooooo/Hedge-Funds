@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import html
-from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +31,7 @@ import pandas as pd
 
 import flow_backtest as fb
 import smart_money as sm
+import suivi_signaux as ss
 import trade_cards as tc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,11 +201,12 @@ def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
     if spy is not None and len(eq) > 1:
         s = spy.reindex(eq.index).ffill()
         spy_perf = s.iloc[-1] / s.iloc[0] - 1
-    head = (f'<p class="note">Démarré vide le {t0:%d/%m/%Y} : il ne contient que les achats et renforcements '
-            f'décidés depuis. La part non investie est placée dans le S&amp;P 500.</p>'
+    head = (f'<p class="note">Démarré à zéro le {t0:%d/%m/%Y}, 100 % en espèces. Il suit seulement les signaux '
+            f'publiés depuis : achat ou renforcement = la ligne est complétée jusqu\'à un douzième du '
+            f'portefeuille ; allègement = rien ; vente = toute la ligne. L\'argent non investi reste en espèces.</p>'
             f'<div class="bank-figures"><span class="big">{_pct(perf)}</span><span class="muted">depuis le départ'
             + (f" · S&amp;P 500 {_pct(spy_perf)}" if spy_perf is not None else "")
-            + f" · {n_lines} ligne(s) en actions</span></div>")
+            + f" · {n_lines} ligne(s) en actions · espèces {_pct(1 - live.gross.iloc[-1], 0, False)}</span></div>")
     if moves.empty:
         return head + '<p class="empty">Aucun mouvement pour l\'instant : les premiers achats apparaîtront ici.</p>'
     head += _live_lines_html(live, t0)
@@ -412,28 +413,25 @@ SCRIPT = """
       var V = num(total), I = Math.min(num(invested), V), free = V - I, target = weight * V;
       document.getElementById('pf-summary').textContent = V > 0
         ? 'Une ligne pleine = ' + fmt.format(target) + ' (' + (weight * 100).toFixed(1).replace('.', ',') +
-          ' % du portefeuille). Disponible pour acheter : ' + fmt.format(free) + '.'
+          ' % du portefeuille). Espèces disponibles : ' + fmt.format(free) + '.'
         : 'Indiquez la valeur de votre portefeuille pour voir les montants.';
       boxes.forEach(function (box) {
         var mode = box.getAttribute('data-mode'), out = box.querySelector('.advice'), heldEl = box.querySelector('.held');
         if (V <= 0) { out.textContent = ''; return; }
-        var defaultHeld = mode === 'buy' ? 0 : (mode === 'add' ? target * part : (mode === 'trim' ? target * 1.5 : target));
+        var defaultHeld = mode === 'sell' ? target : 0;
         heldEl.placeholder = Math.round(defaultHeld);
         var held = heldEl.value === '' ? defaultHeld : num(heldEl), text;
         if (mode === 'buy' || mode === 'add') {
           var need = Math.max(0, target - held);
           text = need <= 0 ? 'Ligne déjà pleine (' + fmt.format(held) + ') : rien à acheter.'
-            : (mode === 'buy' ? 'Achetez ' : 'Renforcez de ') + fmt.format(need) +
+            : (held > 0 ? 'Renforcez de ' : 'Achetez ') + fmt.format(need) +
               ' pour arriver à ' + fmt.format(target) + '.';
           if (need > free + 0.5) {
-            text += free > 0 ? ' Vous n’avez que ' + fmt.format(free) + ' disponibles : prenez les ' +
-              fmt.format(need - free) + ' manquants sur votre part placée dans le S&P 500 (le fonds y place l’argent non investi), ou limitez-vous à ' + fmt.format(free) + '.'
-              : ' Rien n’est disponible : vendez ' + fmt.format(need) + ' de votre part placée dans le S&P 500 pour financer cet achat.';
+            text += free > 0 ? ' Vous n’avez que ' + fmt.format(free) + ' en espèces : limitez-vous à ' + fmt.format(free) + '.'
+              : ' Plus d’espèces disponibles : pas d’achat (règle du portefeuille).';
           }
-        } else if (mode === 'half') {
-          text = 'Vendez la moitié de la ligne : ' + fmt.format(held * part) + ' (gardez ' + fmt.format(held - held * part) + ').';
-        } else if (mode === 'trim') {
-          text = 'Vendez ' + fmt.format(Math.max(0, held - target)) + ' pour ramener la ligne à ' + fmt.format(target) + '.';
+        } else if (mode === 'half' || mode === 'trim') {
+          text = 'Allègement : on ne fait rien (règle du portefeuille réel), la ligne est gardée.';
         } else {
           text = 'Vendez toute la ligne : ' + fmt.format(held) + '.';
         }
@@ -557,7 +555,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
         <label>Valeur totale de mon portefeuille : <input type="number" id="pf-total" min="0" step="100" inputmode="decimal" placeholder="2000"> €</label>
         <label>Dont déjà investi : <input type="number" id="pf-invested" min="0" step="100" inputmode="decimal" placeholder="1200"> €</label>
         <p class="note" id="pf-summary">Indiquez la valeur de votre portefeuille pour voir les montants.</p>
-        <p class="note">Règle du fonds : {round(1 / line_weight) if line_weight else 12} lignes de même poids ; un allègement vend la moitié de la ligne, une vente la totalité. Vos montants restent dans votre navigateur.</p>
+        <p class="note">Règle du portefeuille réel : {round(1 / line_weight) if line_weight else 12} lignes de même poids ; achat ou renforcement = ligne complétée jusqu'à un douzième ; allègement = rien ; vente = toute la ligne ; l'argent non investi reste en espèces. Vos montants restent dans votre navigateur.</p>
       </div>
       <div class="filters" role="group" aria-label="Filtrer les décisions">
         <button type="button" id="f-all" data-filter="all" aria-pressed="true">Toutes</button>
@@ -632,7 +630,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
         benchmark, bench_label = spy, "S&P 500 · SPY"
     live = extra = None
     if not synthetic:
-        live = fb.run_backtest(data, replace(cfg, trading_start=sm.LIVE_START))
+        live = ss.follow(result, sm.LIVE_START)  # portefeuille réel : il suit les signaux du fonds
         extra = _pelosi_html(ROOT / "outputs" / "pelosi")
     out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label,
                                     live=live, live_start=sm.LIVE_START, extra_html=extra or ""),

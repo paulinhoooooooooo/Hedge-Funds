@@ -114,8 +114,11 @@ bash backtest/attendre_mise_a_jour.sh   # 0 complète, 2 incomplète, 1 échec ;
 
 - **Téléchargements coupés en route** : une réponse plus courte que sa taille annoncée est refaite ;
   une archive SEC abîmée laissée par un essai précédent est retéléchargée.
-- **Portefeuille réel** : démarré vide le 24/09/2026 (`smart_money.LIVE_START`) ; seuls les achats et
-  renforcements décidés depuis y entrent ; le coupe-circuit de -20 % repart de zéro ce jour-là.
+- **Portefeuille réel** (`backtest/suivi_signaux.py`) : remis à zéro le 15/10/2026 à la demande du
+  fondateur (`smart_money.LIVE_START`), 100 % en espèces. Il suit seulement les signaux publiés par le
+  fonds à partir de ce jour : achat ou renforcement = la ligne est complétée jusqu'à un douzième du
+  portefeuille (si les espèces le permettent) ; allègement, dé-risquage, écrêtage = rien ; vente = toute la
+  ligne. Ordres au cours de clôture du jour du signal, frais 0,10 %. L'argent non investi reste en espèces.
 - **Données manquantes ou cours périmés** : mise à jour déclarée incomplète, aucun mouvement annoncé,
   la page de la veille reste en place (le conteneur étant vide, une étape en échec = données absentes).
 - **Aucun mouvement perdu ni annoncé deux fois** : la page Desk publiée garde un petit état

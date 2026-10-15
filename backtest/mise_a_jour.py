@@ -9,7 +9,8 @@ Une seule commande, lancée chaque soir de semaine après la clôture de New Yor
 
 1. télécharge toutes les données (étapes de phase1_data.py ; une étape en échec est retentée une
    fois, puis signalée) ;
-2. relance le portefeuille réel (démarré vide le jour smart_money.LIVE_START) et la copie Pelosi ;
+2. relance le fonds, puis le portefeuille réel qui suit ses signaux depuis smart_money.LIVE_START
+   (suivi_signaux.py), et la copie Pelosi ;
 3. réécrit la page Desk (outputs/desk_smart_money.html) et y range un petit état (dernière séance
    signalée, déclarations Pelosi déjà vues) ;
 4. écrit outputs/notification.md (texte à envoyer) et outputs/etat_mise_a_jour.json (complet ou non).
@@ -44,6 +45,7 @@ import dashboard  # noqa: E402
 import flow_backtest as fb  # noqa: E402
 import phase1_data as p1  # noqa: E402
 import smart_money as sm  # noqa: E402
+import suivi_signaux as ss  # noqa: E402
 import notifier  # noqa: E402
 
 STAGES = ["sec", "universe", "figi", "sectors", "prices", "finra", "cot", "ats", "short", "events",
@@ -177,9 +179,15 @@ def notification(result: fb.BacktestResult, failed: list[str], spy: pd.Series,
     since = live.iloc[-1] / live.iloc[0] - 1 if len(live) > 1 else 0.0
     spy_since = spy_live.iloc[-1] / spy_live.iloc[0] - 1 if len(live) > 1 else 0.0
     lines = [f"# Fonds — {period}", ""]
+    if state.get("depart") and state["depart"] != f"{start:%Y-%m-%d}":
+        lines.append(f"Portefeuille réel remis à zéro le {start:%d/%m/%Y} : 100 % en espèces. Il suivra les "
+                     "prochains signaux (achat et renforcement : achat ; allègement : rien ; vente : toute la ligne).")
+        if not moves.empty:
+            lines.append("")
     if moves.empty:
-        lines.append("Aucun mouvement de portefeuille." if state.get("derniere_seance") != f"{last:%Y-%m-%d}"
-                     else "Aucune nouvelle séance (jour férié à New York ?) : rien de nouveau.")
+        if not (state.get("depart") and state["depart"] != f"{start:%Y-%m-%d}"):
+            lines.append("Aucun mouvement de portefeuille." if state.get("derniere_seance") != f"{last:%Y-%m-%d}"
+                         else "Aucune nouvelle séance (jour férié à New York ?) : rien de nouveau.")
     else:
         lines.append(f"{len(moves)} mouvement(s) de portefeuille :")
         for r in moves.itertuples():
@@ -189,7 +197,8 @@ def notification(result: fb.BacktestResult, failed: list[str], spy: pd.Series,
         "",
         f"- Dernière séance : fonds {day:+.2%}, S&P 500 {spy_day:+.2%}",
         f"- Lignes détenues : {int((result.scales.iloc[-1] > 0).sum())} ; actions {result.gross.iloc[-1]:.0%}, "
-        f"S&P 500 {index_share:.0%}",
+        + (f"S&P 500 {index_share:.0%}" if result.index_exposure is not None
+           else f"espèces {1 - result.gross.iloc[-1]:.0%}"),
         f"- Depuis le départ du portefeuille réel ({start:%d/%m/%Y}) : fonds {since:+.2%}, S&P 500 {spy_since:+.2%}",
     ]
     if pelosi_new is not None and not pelosi_new.empty:
@@ -239,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         engine = p1.DATA / "engine"
         data = fb.load_market_from_csv(engine)
-        result = fb.run_backtest(data, sm.phase1_config(data, trading_start=sm.LIVE_START))
+        backtest = fb.run_backtest(data, sm.phase1_config(data))
+        result = ss.follow(backtest, sm.LIVE_START)  # portefeuille réel : il suit les signaux
     except Exception as err:  # noqa: BLE001 — pas de fichiers moteur : échec franc, jamais silencieux
         traceback.print_exc()
         reasons = critical + [f"calcul du fonds impossible ({type(err).__name__}: {err})"]

@@ -38,9 +38,10 @@ PROXY_FLOW_SETTINGS = {"entry_flow_threshold": 0.0, "exit_flow_threshold": -0.05
 # placée dans le S&P 500 (piste 2, si le cours du SPY est fourni : fichier market.csv).
 PHASE1_FUND_SETTINGS = {**PROXY_FLOW_SETTINGS, "sizing": "equal", "max_positions": 12}
 
-# Début du portefeuille réel (décision des fondateurs, 24/09/2026) : il démarre vide et ne se remplit
-# qu'avec les achats décidés à partir de ce jour (StrategyConfig.trading_start).
-LIVE_START = "2026-09-24"
+# Début du portefeuille réel. Réinitialisé à zéro par le fondateur le 15/10/2026 (premier départ :
+# 24/09/2026) : 100 % en espèces, il ne fait que suivre les signaux publiés à partir de ce jour
+# (achat et renforcement -> achat ; allègement -> rien ; vente -> toute la ligne), voir suivi_signaux.py.
+LIVE_START = "2026-10-15"
 
 
 def phase1_config(data=None, **overrides):
