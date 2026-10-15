@@ -128,7 +128,7 @@ n'est jamais écrit dans ce dépôt public, il est passé par la variable `NTFY_
 programmées. Chaque mise à jour envoie son résumé (mouvements, ou « aucun mouvement », ou « ⚠️ »).
 
 **Depuis le 13/10/2026, le calcul quotidien tourne sur GitHub Actions** (`.github/workflows/fonds_mise_a_jour.yml`,
-présent aussi sur la branche principale du dépôt, seule à pouvoir le programmer) : mardi → samedi à 6 h 30 UTC,
+présent aussi sur la branche principale du dépôt, seule à pouvoir le programmer) : mardi → samedi, quatre horaires de nuit entre 0 h 37 et 6 h 41 UTC (GitHub retarde souvent ses lancements ; le premier qui démarre fait le calcul),
 données gardées d'un passage à l'autre (cache), résumé ntfy envoyé par le programme, page déposée sur la
 branche `desk-page`. Secrets GitHub nécessaires : `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`,
 `SEC_CONTACT_EMAIL`, `NTFY_TOPIC`. La routine Claude « Fonds — publication de la page Desk » (9 h 45 et
