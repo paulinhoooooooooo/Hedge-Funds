@@ -70,4 +70,5 @@ def test_robustness_report_on_synthetic_market(capsys):
     res = rm.main(["--data-dir", "/inexistant", "--tirages", "1"])
     assert len(res["reglages"]) == len(rm.THRESHOLDS) + len(rm.LINES) + 1
     assert len(res["hasard"]["tirages"]) == 1
+    assert [p["periode"] for p in res["periodes"]] == [p[0] for p in rm.PERIODS]  # aucune période oubliée
     assert "Test du hasard" in capsys.readouterr().out

@@ -96,7 +96,7 @@ def main(argv: Optional[list[str]] = None) -> dict:
     rows.append(("Frais", "doublés", metrics(fb.run_backtest(data, c2, signals=sig).equity),
                  metrics(fb.run_backtest(data, c2, signals=union_with(sig, alerts)).equity)))
     periods = [(label, metrics(fund.equity, a, b), metrics(base.equity, a, b)) for label, a, b in PERIODS
-               if fund.equity.index[0] <= pd.Timestamp(a) <= fund.equity.index[-1]]
+               if pd.Timestamp(a) <= fund.equity.index[-1] and (b is None or pd.Timestamp(b) >= fund.equity.index[0])]
     draws = [metrics(fb.run_backtest(data, cfg, signals=union_with(sig, random_alerts(sig, alerts, seed))).equity)
              for seed in range(args.tirages)]
 
