@@ -1,0 +1,45 @@
+# Analyse ponctuelle : « Et si le fonds ne suivait que le Radar des grands acteurs ? »
+# Reprend les données réelles gardées par la mise à jour du matin (cache GitHub, lecture seule),
+# lance backtest/radar_seul.py et écrit le résultat dans le journal du passage et dans son résumé.
+# Aucune clé n'est utilisée : le calcul se fait sur les fichiers déjà téléchargés.
+name: Analyse — radar seul face au fonds
+
+on:
+  push:
+    branches: [claude/sharp-pasteur-rnlt5h]
+    paths: [backtest/radar_seul.py, .github/workflows/analyse_radar_seul.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Dépendances
+        run: pip install -q -r requirements.txt
+
+      - name: Données de la mise à jour du matin (lecture seule)
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: fonds-data-analyse-${{ github.run_id }}
+          restore-keys: fonds-data-
+          fail-on-cache-miss: true
+
+      - name: Radar seul face au fonds
+        run: |
+          test -s data/phase1/engine/prices.csv
+          python backtest/radar_seul.py --json radar_seul.json | tee radar_seul.md
+          cat radar_seul.md >> "$GITHUB_STEP_SUMMARY"
