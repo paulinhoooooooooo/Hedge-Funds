@@ -1,13 +1,13 @@
 # Analyse ponctuelle : « Et si le fonds ne suivait que le Radar des grands acteurs ? »
 # Reprend les données réelles gardées par la mise à jour du matin (cache GitHub, lecture seule),
-# lance backtest/radar_seul.py et écrit le résultat dans le journal du passage et dans son résumé.
+# lance backtest/radar_seul.py puis backtest/melange_radar.py et écrit le résultat dans le journal du passage et dans son résumé.
 # Aucune clé n'est utilisée : le calcul se fait sur les fichiers déjà téléchargés.
 name: Analyse — radar seul face au fonds
 
 on:
   push:
     branches: [claude/sharp-pasteur-rnlt5h]
-    paths: [backtest/radar_seul.py, .github/workflows/analyse_radar_seul.yml]
+    paths: [backtest/radar_seul.py, backtest/melange_radar.py, .github/workflows/analyse_radar_seul.yml]
   workflow_dispatch:
 
 permissions:
@@ -43,3 +43,8 @@ jobs:
           test -s data/phase1/engine/prices.csv
           python backtest/radar_seul.py --json radar_seul.json | tee radar_seul.md
           cat radar_seul.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Mélanges du fonds et du radar
+        run: |
+          python backtest/melange_radar.py --json melange_radar.json | tee melange_radar.md
+          cat melange_radar.md >> "$GITHUB_STEP_SUMMARY"
