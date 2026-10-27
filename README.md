@@ -12,11 +12,13 @@ et la crypto, avec des positions détenues de 15 jours à plusieurs trimestres.
 | [`backtest/market_footprint.py`](backtest/market_footprint.py) | Troisième jambe : empreinte des grands acteurs (banques, institutions) dans le prix et le volume — zone de valeur, VWAP, ratio hausses / baisses, jours de distribution |
 | [`backtest/institutional_radar.py`](backtest/institutional_radar.py) | Radar des grands acteurs : volumes anormaux, pression acheteuse ou vendeuse, accumulation discrète et échanges hors bourse, sur l'heure, le jour, la semaine et le mois ; plus les indices gratuits complémentaires (divergence volume / prix, jours d'accumulation, force relative, bourses privées et plateformes des banques, positions vendeuses, achats des dirigeants, franchissements de 5 %, gros blocs d'au moins 1 M$ lus dans le détail des transactions, filtre des jours de résultats) |
 | [`backtest/trade_cards.py`](backtest/trade_cards.py) · [`backtest/dashboard.py`](backtest/dashboard.py) | Fiches de trade (quoi, pourquoi, historique du signal, aujourd'hui) et page « Desk Smart Money » |
+| [`backtest/radar_seul.py`](backtest/radar_seul.py) · [`backtest/melange_radar.py`](backtest/melange_radar.py) · [`backtest/robustesse_melange.py`](backtest/robustesse_melange.py) | Analyses du 27/10/2026 : le radar des grands acteurs seul, ses mélanges avec le fonds (fonds OU radar, fonds ET radar, deux poches) et la solidité du meilleur (seuils, nombre de lignes, frais doublés, sous-périodes, test du hasard). Lancées sur données réelles par le passage GitHub « Analyse — radar seul face au fonds » |
+| [`backtest/portefeuille_essai.py`](backtest/portefeuille_essai.py) | Portefeuille d'essai « fonds OU radar », suivi sur la page Desk à côté du portefeuille réel (même départ, mêmes règles, sans effet sur le fonds) |
 | [`backtest/phase1_data.py`](backtest/phase1_data.py) | Circuit de données réelles gratuites (SEC 13F, OpenFIGI, secteurs SIC, cours Tiingo, positions des banques CFTC) — marche à suivre : [`docs/PHASE1_DONNEES_REELLES.md`](docs/PHASE1_DONNEES_REELLES.md) |
 | [`backtest/tradingview_bridge.py`](backtest/tradingview_bridge.py) | Export vers TradingView : watchlist et indicateur Pine « journal du fonds » par ligne active |
 | [`tradingview/`](tradingview/) | Indicateurs Pine *Smart Money Flow Monitor* et *Empreinte des grands acteurs*, récepteur des alertes webhook |
 | [`mcp_server/`](mcp_server/) | Serveur MCP du fonds (lecture seule) : interroger le fonds en français depuis un assistant IA |
-| [`tests/`](tests/) | 76 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
+| [`tests/`](tests/) | 123 tests, dont le test d'absence de biais d'anticipation (perturbation du futur) |
 
 **Décisions du 23/09/2026** : acheteur uniquement, liste Smart Money, actions US d'abord, données
 gratuites, risque équilibré, TradingView gratuit, suivi des banques par le prix et le volume

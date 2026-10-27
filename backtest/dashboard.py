@@ -8,6 +8,7 @@ Contenu, du plus important au plus détaillé :
   * l'état du fonds (rendement, pire perte, Sharpe, lignes) et sa courbe face au marché ;
   * les dernières décisions, chacune sous forme de fiche (quoi, pourquoi, historique, aujourd'hui) ;
   * le radar des grands acteurs (heure, jour, semaine, mois) ;
+  * le portefeuille d'essai « fonds OU radar », suivi à côté du portefeuille réel (portefeuille_essai.py) ;
   * la position des banques sur les contrats à terme (CFTC) ;
   * le portefeuille et le signal de chaque ligne.
 
@@ -30,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 import flow_backtest as fb
+import portefeuille_essai as pe
 import smart_money as sm
 import suivi_signaux as ss
 import trade_cards as tc
@@ -187,11 +189,17 @@ LIVE_ACTIONS = {
     "REDUCE_DISTRIBUTION_ALERT": ("warn", "ALLÈGEMENT"), "EXIT_DISTRIBUTION_CONFIRMED": ("sell", "VENTE"),
     "EXIT_INSTITUTIONAL_LIQUIDATION": ("sell", "VENTE"), "RISK_STOP": ("sell", "VENTE URGENTE"),
     "RISK_DRAWDOWN": ("warn", "DÉ-RISQUAGE"), "RISK_TRIM": ("warn", "ÉCRÊTAGE"),
+    "ENTRY_RADAR": ("buy", "ACHAT · RADAR"),
 }
 
 
-def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
-    """Portefeuille réel : démarre vide le jour `start`, ne contient que les décisions prises depuis."""
+def _live_html(live, spy: Optional[pd.Series], start: str, note: Optional[str] = None, extra: str = "",
+               live_prices: bool = True) -> str:
+    """Portefeuille réel : démarre vide le jour `start`, ne contient que les décisions prises depuis.
+
+    note, extra : texte d'introduction et chiffre de comparaison (portefeuille d'essai) ;
+    live_prices=False : lignes non mises à jour par le logiciel de cours en direct.
+    """
     t0 = pd.Timestamp(start)
     eq = live.equity[live.equity.index >= t0]
     moves = live.journal[pd.to_datetime(live.journal["date"]) >= t0].sort_values("date", ascending=False)
@@ -201,15 +209,17 @@ def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
     if spy is not None and len(eq) > 1:
         s = spy.reindex(eq.index).ffill()
         spy_perf = s.iloc[-1] / s.iloc[0] - 1
-    head = (f'<p class="note">Démarré à zéro le {t0:%d/%m/%Y}, 100 % en espèces. Il suit seulement les signaux '
-            f'publiés depuis : achat ou renforcement = la ligne est complétée jusqu\'à un douzième du '
-            f'portefeuille ; allègement = rien ; vente = toute la ligne. L\'argent non investi reste en espèces.</p>'
+    if note is None:
+        note = (f'Démarré à zéro le {t0:%d/%m/%Y}, 100 % en espèces. Il suit seulement les signaux '
+                f'publiés depuis : achat ou renforcement = la ligne est complétée jusqu\'à un douzième du '
+                f'portefeuille ; allègement = rien ; vente = toute la ligne. L\'argent non investi reste en espèces.')
+    head = (f'<p class="note">{note}</p>'
             f'<div class="bank-figures"><span class="big">{_pct(perf)}</span><span class="muted">depuis le départ'
-            + (f" · S&amp;P 500 {_pct(spy_perf)}" if spy_perf is not None else "")
+            + extra + (f" · S&amp;P 500 {_pct(spy_perf)}" if spy_perf is not None else "")
             + f" · {n_lines} ligne(s) en actions · espèces {_pct(1 - live.gross.iloc[-1], 0, False)}</span></div>")
     if moves.empty:
         return head + '<p class="empty">Aucun mouvement pour l\'instant : les premiers achats apparaîtront ici.</p>'
-    head += _live_lines_html(live, t0)
+    head += _live_lines_html(live, t0, live_prices)
     rows = []
     for r in moves.itertuples():
         kind, text = LIVE_ACTIONS.get(r.action, ("warn", r.action))
@@ -220,7 +230,26 @@ def _live_html(live, spy: Optional[pd.Series], start: str) -> str:
 <tbody>{''.join(rows)}</tbody></table></div>"""
 
 
-def _live_lines_html(live, t0: pd.Timestamp) -> str:
+def _essai_html(essai, live, spy: Optional[pd.Series], start: str) -> str:
+    """Portefeuille d'essai « fonds OU radar » (portefeuille_essai.py), suivi à côté du portefeuille réel."""
+    t0 = pd.Timestamp(start)
+    extra = ""
+    if live is not None:
+        eq = live.equity[live.equity.index >= t0]
+        if len(eq) > 1:
+            extra = f" · portefeuille réel {_pct(eq.iloc[-1] / eq.iloc[0] - 1)}"
+    note = (f"Essai, sans effet sur le fonds. Même départ et mêmes règles que le portefeuille réel (à zéro le "
+            f"{t0:%d/%m/%Y}, un douzième par ligne, vente = toute la ligne), mais les places libres sont prises par "
+            f"les alertes d'accumulation du radar des grands acteurs (les plus fortes d'abord). Vente : décision du "
+            f"fonds, distribution confirmée selon ses règles, ou perte critique. Sur le backtest 2016-2026, ce "
+            f"mélange a rapporté +29 % par an (fonds seul : +23 %) pour une pire chute équivalente ; on vérifie ici "
+            f"s'il fait mieux en vrai.")
+    return (f'<section class="panel" aria-label="Portefeuille d\'essai"><h2>Portefeuille d\'essai · fonds OU radar · '
+            f'depuis le {t0:%d/%m/%Y}</h2>{_live_html(essai, spy, start, note=note, extra=extra, live_prices=False)}'
+            f'</section>')
+
+
+def _live_lines_html(live, t0: pd.Timestamp, live_prices: bool = True) -> str:
     """Rendement de chaque action du portefeuille réel : lignes détenues, puis lignes vendues depuis le départ."""
     trades = live.trades[pd.to_datetime(live.trades["first_fill"]) >= t0].rename(columns={"return": "ret"})
     if trades.empty:
@@ -238,7 +267,9 @@ def _live_lines_html(live, t0: pd.Timestamp) -> str:
         return f"<td class='{extra}num {cls}'>{_pct(r)}</td>"
 
     # data-asset / data-entry : le logiciel lancé sur un ordinateur (temps_reel.py) y met les cours en direct.
-    rows = [f"<tr class='live-line' data-asset='{esc(r.asset)}' data-entry='{r.avg_entry_price:.6f}'>"
+    line_cls, sum_id, status_id = (("live-line", " id='lv-summary'", " id='lv-status'") if live_prices
+                                   else ("essai-line", "", ""))
+    rows = [f"<tr class='{line_cls}' data-asset='{esc(r.asset)}' data-entry='{r.avg_entry_price:.6f}'>"
             f"<td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret, 'lv-ret ')}"
             f"<td class='num'>{r.avg_entry_price:,.2f} $</td><td class='lv-px num'>{last_px.get(r.asset, float('nan')):,.2f} $</td>"
             f"<td class='num'>{_pct(weights.get(r.asset, 0.0), 1, False)}</td><td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td></tr>"
@@ -249,8 +280,10 @@ def _live_lines_html(live, t0: pd.Timestamp) -> str:
         html += f"""<h3 class="label">Lignes détenues · rendement de chaque action depuis l'achat</h3><div class="table-wrap"><table>
 <thead><tr><th>Titre</th><th class="num">Rendement</th><th class="num">Prix d'achat</th><th class="num">Cours</th><th class="num">Poids</th><th>Acheté le</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></div>
-<p class="note" id="lv-summary">Rendement moyen des lignes détenues : {_pct(avg)} ; {int((held['ret'] > 0).sum())} en gain, {int((held['ret'] < 0).sum())} en perte.</p>
-<p class="note" id="lv-status">Cours de clôture du {last_px.name:%d/%m/%Y} (mise à jour du matin). Pour les cours en direct, lancez le logiciel sur votre ordinateur : <code>python backtest/temps_reel.py</code>.</p>"""
+<p class="note"{sum_id}>Rendement moyen des lignes détenues : {_pct(avg)} ; {int((held['ret'] > 0).sum())} en gain, {int((held['ret'] < 0).sum())} en perte.</p>
+<p class="note"{status_id}>Cours de clôture du {last_px.name:%d/%m/%Y} (mise à jour du matin).""" + (
+            """ Pour les cours en direct, lancez le logiciel sur votre ordinateur : <code>python backtest/temps_reel.py</code>.</p>"""
+            if live_prices else "</p>")
     if not closed.empty:
         crow = [f"<tr><td class='ticker'>{esc(r.asset)}</td>{ret_cell(r.ret)}<td>{pd.Timestamp(r.first_fill):%d/%m/%Y}</td>"
                 f"<td>{pd.Timestamp(r.exit_date):%d/%m/%Y}</td></tr>"
@@ -506,7 +539,7 @@ def _invested_text(result) -> str:
 def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], cot: Optional[pd.DataFrame],
                      synthetic: bool, label: str, benchmark: Optional[pd.Series] = None,
                      benchmark_label: str = "univers équipondéré", live=None, live_start: Optional[str] = None,
-                     extra_html: str = "") -> str:
+                     extra_html: str = "", essai=None) -> str:
     cfg = result.config
     line_weight = min(cfg.max_weight, 1.0 / cfg.max_positions) if cfg.sizing == "equal" else cfg.max_weight
     partial = cfg.partial_exit_fraction
@@ -542,6 +575,7 @@ def render_dashboard(result, review: pd.DataFrame, cards: list[tc.TradeCard], co
   </div>
   <section class="kpis" aria-label="État du fonds">{kpi_html}</section>
   {f'<section class="panel" aria-label="Portefeuille réel"><h2>Portefeuille réel · depuis le {pd.Timestamp(live_start):%d/%m/%Y}</h2>{_live_html(live, benchmark, live_start)}</section>' if live is not None else ''}
+  {_essai_html(essai, live, benchmark, live_start) if essai is not None else ''}
   <section class="panel chart" aria-label="Courbe du fonds">
     <h2>Backtest depuis 2016 · le fonds face au marché</h2>
     {_chart_svg(result.equity, bench)}
@@ -628,12 +662,16 @@ def main(argv: Optional[list[str]] = None) -> Path:
         spy = pd.read_csv(spy_path, parse_dates=["date"]).set_index("date")["adjClose"]
         spy.index = pd.DatetimeIndex(spy.index).tz_localize(None) if spy.index.tz is not None else spy.index
         benchmark, bench_label = spy, "S&P 500 · SPY"
-    live = extra = None
+    live = extra = essai = None
     if not synthetic:
         live = ss.follow(result, sm.LIVE_START)  # portefeuille réel : il suit les signaux du fonds
+        try:  # portefeuille d'essai « fonds OU radar » : ne doit jamais empêcher la page du fonds
+            essai = pe.follow_blend(result, sm.LIVE_START)
+        except Exception as err:  # noqa: BLE001
+            print(f"Portefeuille d'essai indisponible ({type(err).__name__}: {err})")
         extra = _pelosi_html(ROOT / "outputs" / "pelosi")
     out.write_text(render_dashboard(result, review, cards, cot, synthetic, label, benchmark, bench_label,
-                                    live=live, live_start=sm.LIVE_START, extra_html=extra or ""),
+                                    live=live, live_start=sm.LIVE_START, extra_html=extra or "", essai=essai),
                    encoding="utf-8")
     print(f"Page écrite : {out}")
     return out

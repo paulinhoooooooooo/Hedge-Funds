@@ -1,13 +1,15 @@
 # Analyse ponctuelle : « Et si le fonds ne suivait que le Radar des grands acteurs ? »
 # Reprend les données réelles gardées par la mise à jour du matin (cache GitHub, lecture seule),
-# lance backtest/radar_seul.py puis backtest/melange_radar.py et écrit le résultat dans le journal du passage et dans son résumé.
+# lance les analyses du radar (radar seul, mélanges, robustesse, portefeuille d'essai) et écrit les
+# résultats dans le journal du passage et dans son résumé.
 # Aucune clé n'est utilisée : le calcul se fait sur les fichiers déjà téléchargés.
 name: Analyse — radar seul face au fonds
 
 on:
   push:
     branches: [claude/sharp-pasteur-rnlt5h]
-    paths: [backtest/radar_seul.py, backtest/melange_radar.py, .github/workflows/analyse_radar_seul.yml]
+    paths: [backtest/radar_seul.py, backtest/melange_radar.py, backtest/robustesse_melange.py,
+            backtest/portefeuille_essai.py, .github/workflows/analyse_radar_seul.yml]
   workflow_dispatch:
 
 permissions:
@@ -48,3 +50,13 @@ jobs:
         run: |
           python backtest/melange_radar.py --json melange_radar.json | tee melange_radar.md
           cat melange_radar.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Robustesse du mélange fonds OU radar
+        run: |
+          python backtest/robustesse_melange.py --json robustesse.json | tee robustesse.md
+          cat robustesse.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Portefeuille d'essai fonds OU radar
+        run: |
+          python backtest/portefeuille_essai.py | tee essai.md
+          cat essai.md >> "$GITHUB_STEP_SUMMARY"

@@ -52,3 +52,22 @@ def test_two_pockets_rebalance_monthly():
     b = pd.Series(range(len(idx)), index=idx, dtype=float) + 100.0
     mix = mr.two_pockets(a, b)
     assert mix.iloc[0] == 100.0 and mix.iloc[-1] > 100.0 and mix.iloc[-1] < b.iloc[-1]
+
+
+def test_random_alerts_keep_the_daily_count():
+    import flow_backtest as fb
+    import robustesse_melange as rm
+    data = fb.generate_synthetic_market(start="2018-01-02", end="2020-12-31")
+    sig = fb.compute_signals(data, sm.phase1_config(data))
+    alerts = sig.radar.score.reindex(index=sig.calendar, columns=sig.prices.columns) >= ALERT_THRESHOLD
+    rnd = rm.random_alerts(sig, alerts, seed=1)
+    assert (rnd.sum(axis=1) <= alerts.sum(axis=1)).all() and rnd.to_numpy().sum() > 0.9 * alerts.to_numpy().sum()
+    assert not (rnd & ~sig.price_valid).to_numpy().any()  # seulement des titres cotés ce jour-là
+
+
+def test_robustness_report_on_synthetic_market(capsys):
+    import robustesse_melange as rm
+    res = rm.main(["--data-dir", "/inexistant", "--tirages", "1"])
+    assert len(res["reglages"]) == len(rm.THRESHOLDS) + len(rm.LINES) + 1
+    assert len(res["hasard"]["tirages"]) == 1
+    assert "Test du hasard" in capsys.readouterr().out
