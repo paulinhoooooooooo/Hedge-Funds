@@ -15,7 +15,8 @@ placée dans le S&P 500). Seuls les signaux changent :
 Trois mesures :
   1. backtest depuis 2016 : le fonds, le radar seul et le S&P 500 ;
   2. depuis le départ du portefeuille réel (smart_money.LIVE_START), avec les règles du portefeuille
-     réel (suivi_signaux.follow) appliquées d'un côté aux signaux du fonds, de l'autre à ceux du radar ;
+     réel (suivi_signaux.follow) appliquées aux signaux du fonds, à ceux du backtest du radar seul et
+     directement aux alertes du radar (portefeuille vide au départ) ;
   3. ce qui suit une alerte : écart moyen avec le S&P 500, 20 et 60 séances après.
 
 Usage : python backtest/radar_seul.py [--data-dir data/phase1/engine] [--json sortie.json]
@@ -28,6 +29,7 @@ import argparse
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 import numpy as np
@@ -100,6 +102,56 @@ def live_summary(live, spy: Optional[pd.Series], start: str) -> dict:
     return out
 
 
+def alert_journal(sig: fb.Signals, start: str) -> pd.DataFrame:
+    """Décisions « radar seul » depuis `start`, prises directement sur les alertes du jour.
+
+    Le backtest du radar seul était déjà plein (12 lignes) avant `start` : il ne publie presque plus
+    d'achat. Ici, un portefeuille qui part vide achète chaque alerte d'accumulation (les plus fortes
+    d'abord) et vend toute la ligne sur une alerte de distribution, avec les règles de suivi_signaux.follow.
+    """
+    r = sig.radar.score.reindex(index=sig.calendar, columns=sig.prices.columns)
+    r = r[r.index >= pd.Timestamp(start)]
+    rows = []
+    for t, row in r.iterrows():
+        valid = sig.price_valid.loc[t]
+        for a, s in row[(row <= -ALERT_THRESHOLD) & valid].items():
+            rows.append({"date": t, "asset": a, "action": "EXIT_DISTRIBUTION_CONFIRMED", "score": s})
+        for a, s in row[(row >= ALERT_THRESHOLD) & valid].sort_values(ascending=False).items():
+            rows.append({"date": t, "asset": a, "action": "ENTRY", "score": s})
+    return pd.DataFrame(rows, columns=["date", "asset", "action", "score"])
+
+
+def period_summary(result, start: str) -> dict:
+    """Ce qu'a fait le portefeuille du backtest entre `start` et la dernière séance."""
+    eq = result.equity[result.equity.index >= pd.Timestamp(start)]
+    w = result.weights.iloc[-1]
+    return {"rendement": float(eq.iloc[-1] / eq.iloc[0] - 1.0) if len(eq) > 1 else 0.0,
+            "lignes": [a for a in w[w > 0].sort_values(ascending=False).index]}
+
+
+WINDOWS = (("1 mois", 1), ("3 mois", 3), ("6 mois", 6), ("1 an", 12), ("3 ans", 36), ("5 ans", 60))
+
+
+def horizons(curves: dict[str, pd.Series]) -> dict:
+    """Rendement de chaque courbe sur des fenêtres glissantes jusqu'à la dernière séance, puis année par année."""
+    end = min(c.index[-1] for c in curves.values())
+    curves = {k: c[c.index <= end].dropna() for k, c in curves.items()}
+
+    def ret(c: pd.Series, t0: pd.Timestamp, t1: pd.Timestamp) -> float:
+        before = c[c.index <= t0]  # cours de clôture de la veille de la fenêtre
+        base = before.iloc[-1] if len(before) else c.iloc[0]
+        upto = c[c.index <= t1]
+        return float(upto.iloc[-1] / base - 1.0) if len(upto) else float("nan")
+
+    windows = {label: {k: ret(c, end - pd.DateOffset(months=m), end) for k, c in curves.items()}
+               for label, m in WINDOWS}
+    windows["depuis le départ"] = {k: float(c.iloc[-1] / c.iloc[0] - 1.0) for k, c in curves.items()}
+    first = max(c.index[0] for c in curves.values())
+    years = {str(y): {k: ret(c, pd.Timestamp(f"{y - 1}-12-31"), pd.Timestamp(f"{y}-12-31")) for k, c in curves.items()}
+             for y in range(first.year, end.year + 1)}
+    return {"fenetres": windows, "annees": years, "fin": f"{end:%Y-%m-%d}"}
+
+
 def alert_study(sig: fb.Signals, spy: Optional[pd.Series]) -> dict:
     """Écart moyen avec l'indice après une alerte (toutes les séances d'alerte, sans sélection)."""
     px, valid = sig.prices, sig.price_valid
@@ -137,16 +189,25 @@ def report(res: dict) -> str:
               f"| Part investie en actions (moyenne) | {f['part_investie_moyenne']:.0%} | {r['part_investie_moyenne']:.0%} | |",
               f"| Allers-retours clôturés | {f['allers_retours']} | {r['allers_retours']} | |",
               f"| Taux de réussite | {pct(f['taux_de_reussite'], 0)} | {pct(r['taux_de_reussite'], 0)} | |", ""]
-    lf, lr = res["reel"]["fonds"], res["reel"]["radar_seul"]
+    lf, lr, la = res["reel"]["fonds"], res["reel"]["radar_seul"], res["reel"]["alertes_radar"]
+    pf, pr = res["reel"]["periode_backtest"]["fonds"], res["reel"]["periode_backtest"]["radar_seul"]
     lines += [f"## 2. Depuis le départ du portefeuille réel ({res['reel']['depart']})", "",
               f"- Signaux du fonds (portefeuille réel) : {pct(lf['rendement'])} ; espèces {lf['especes']:.0%}",
-              f"- Signaux du radar seul : {pct(lr['rendement'])} ; espèces {lr['especes']:.0%}",
-              f"- S&P 500 : {pct(lf.get('spy', np.nan))}", ""]
-    for name, lv in (("fonds", lf), ("radar seul", lr)):
+              f"- Signaux publiés par le backtest du radar seul : {pct(lr['rendement'])} ; espèces {lr['especes']:.0%}",
+              f"- Portefeuille vide au départ qui achète chaque alerte du radar : {pct(la['rendement'])} ; espèces {la['especes']:.0%}",
+              f"- S&P 500 : {pct(lf.get('spy', np.nan))}",
+              f"- Même période dans les backtests (portefeuilles déjà investis) : fonds {pct(pf['rendement'])} "
+              f"({', '.join(pf['lignes'])}) ; radar seul {pct(pr['rendement'])} ({', '.join(pr['lignes'])})", ""]
+    for name, lv in (("fonds", lf), ("radar seul", lr), ("alertes du radar", la)):
         lines.append(f"Lignes détenues ({name}) : " + (", ".join(
             f"{x['titre']} {pct(x['rendement'])} (acheté le {x['achat']})" for x in lv["lignes"]) or "aucune"))
         lines.append(f"Mouvements ({name}) : " + (", ".join(
             f"{x['date']} {x['action']} {x['titre']}" for x in lv["mouvements"]) or "aucun"))
+    h = res["horizons"]
+    lines += ["", f"## 2 bis. Sur des périodes plus longues (backtests, jusqu'au {h['fin']})", "",
+              "| Période | Fonds | Radar seul | S&P 500 |", "|---|---|---|---|"]
+    for label, row in list(h["fenetres"].items()) + [(f"année {y}", row) for y, row in h["annees"].items()]:
+        lines.append(f"| {label} | {pct(row['fonds'])} | {pct(row['radar_seul'])} | {pct(row.get('spy', np.nan))} |")
     lines += ["", "## 3. Après une alerte du radar (écart avec le S&P 500)", ""]
     for h, row in res["apres_alerte"].items():
         lines.append(f"- {h.replace('_seances', ' séances après')} : " + " ; ".join(
@@ -171,7 +232,13 @@ def main(argv: Optional[list[str]] = None) -> dict:
     res = {"source": "DONNÉES SYNTHÉTIQUES de démonstration" if synthetic else "données réelles",
            "backtest": {"fonds": summary(fund, spy), "radar_seul": summary(radar, spy)},
            "reel": {"depart": start, "fonds": live_summary(ss.follow(fund, start), spy, start),
-                    "radar_seul": live_summary(ss.follow(radar, start), spy, start)},
+                    "radar_seul": live_summary(ss.follow(radar, start), spy, start),
+                    "alertes_radar": live_summary(ss.follow(SimpleNamespace(
+                        signals=fund.signals, journal=alert_journal(fund.signals, start)), start), spy, start),
+                    "periode_backtest": {"fonds": period_summary(fund, start),
+                                         "radar_seul": period_summary(radar, start)}},
+           "horizons": horizons({"fonds": fund.equity, "radar_seul": radar.equity,
+                                 **({"spy": spy.reindex(fund.equity.index).ffill().dropna()} if spy is not None else {})}),
            "apres_alerte": alert_study(fund.signals, spy)}
     print(report(res))
     if args.json:

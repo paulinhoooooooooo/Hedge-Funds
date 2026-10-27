@@ -24,5 +24,10 @@ def test_main_on_synthetic_market(capsys):
     assert res["source"].startswith("DONNÉES SYNTHÉTIQUES")
     for side in ("fonds", "radar_seul"):
         assert -1 < res["backtest"][side]["rendement_annuel"] < 1
+    for side in ("fonds", "radar_seul", "alertes_radar"):
         assert "rendement" in res["reel"][side]
+    # portefeuille vide au départ : il n'achète que des titres en alerte d'accumulation
+    assert all(m["action"].startswith(("Achat", "Sortie")) for m in res["reel"]["alertes_radar"]["mouvements"])
+    years = res["horizons"]["annees"]
+    assert set(years) == {str(y) for y in range(2012, 2026)} and "1 an" in res["horizons"]["fenetres"]
     assert "Radar seul face au fonds" in capsys.readouterr().out
