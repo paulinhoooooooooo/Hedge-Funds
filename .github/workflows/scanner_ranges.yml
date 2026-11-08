@@ -1,0 +1,97 @@
+# Scanner des ranges (modèles d'accumulation / distribution du fondateur), chaque nuit.
+# - S&P 500 + 20 premières cryptos, ranges en W, D et 4h (règles : docs/SCANNER_RANGES.md).
+# - Notification ntfy seulement s'il y a une nouvelle alerte (2 touches + retour au milieu).
+# - Rapport déposé sur la branche « ranges-rapport » (rapport_ranges.md, ranges.csv, etat_ranges.json) ;
+#   l'état y garde les alertes déjà envoyées, pour ne jamais envoyer deux fois la même.
+# Secrets utilisés (déjà créés pour le fonds) : ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY, NTFY_TOPIC
+name: Ranges — scanner de nuit
+
+on:
+  schedule:
+    # Tous les jours (la crypto ne ferme pas), après la clôture de New York (20 h / 21 h UTC) et la
+    # bougie journalière crypto (0 h UTC). GitHub retarde souvent ses lancements : trois horaires,
+    # le premier qui démarre fait le calcul, les suivants s'arrêtent (rapport du jour déjà fait).
+    - cron: "47 0 * * *"
+    - cron: "13 3 * * *"
+    - cron: "29 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # dépôt du rapport sur la branche ranges-rapport
+
+concurrency:
+  group: scanner-ranges
+  cancel-in-progress: false
+
+jobs:
+  scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/sharp-pasteur-rnlt5h  # le code du scanner
+          fetch-depth: 1
+
+      - name: État du passage précédent
+        id: etat
+        run: |
+          mkdir -p outputs/ranges_veille
+          fait=non
+          if git fetch -q --depth 1 origin ranges-rapport; then
+            git show FETCH_HEAD:etat_ranges.json > outputs/ranges_veille/etat_ranges.json || true
+            jour=$(python3 -c "import json; print(json.load(open('outputs/ranges_veille/etat_ranges.json'))['genere_le'][:10])" 2>/dev/null || true)
+            if [ "${{ github.event_name }}" = "schedule" ] && [ "$jour" = "$(date -u +%F)" ]; then fait=oui; fi
+          fi
+          echo "fait=$fait" >> "$GITHUB_OUTPUT"
+          echo "Rapport du jour déjà fait : $fait"
+
+      - uses: actions/setup-python@v5
+        if: steps.etat.outputs.fait != 'oui'
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Dépendances
+        if: steps.etat.outputs.fait != 'oui'
+        run: pip install -q -r requirements.txt
+
+      - name: Scanner
+        if: steps.etat.outputs.fait != 'oui'
+        run: |
+          args=(--notifier --lien "https://github.com/${GITHUB_REPOSITORY}/blob/ranges-rapport/rapport_ranges.md")
+          [ -s outputs/ranges_veille/etat_ranges.json ] && args+=(--etat outputs/ranges_veille/etat_ranges.json)
+          python backtest/scanner_ranges.py "${args[@]}" 2>&1 | tee outputs/scanner_ranges.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Résumé du passage
+        if: always() && steps.etat.outputs.fait != 'oui'
+        run: |
+          [ -s outputs/ranges/rapport_ranges.md ] && cat outputs/ranges/rapport_ranges.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Déposer le rapport sur la branche ranges-rapport
+        # Même si trop d'actifs ont échoué : les alertes envoyées doivent être mémorisées.
+        if: always() && steps.etat.outputs.fait != 'oui'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -s outputs/ranges/etat_ranges.json ] || { echo "Pas de rapport à déposer."; exit 0; }
+          dir=$(mktemp -d)
+          cp outputs/ranges/rapport_ranges.md outputs/ranges/ranges.csv outputs/ranges/etat_ranges.json "$dir"/
+          cd "$dir"
+          git init -q -b ranges-rapport
+          git add .
+          git -c user.name="fonds-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Rapport des ranges du $(date -u '+%d/%m/%Y %H:%M') UTC"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ranges-rapport
+
+      - name: Alerte si le passage a échoué
+        if: failure()
+        run: |
+          curl -s --retry 5 --retry-delay 20 -H "Title: Ranges - ALERTE" -H "Priority: high" -H "Tags: warning" \
+            -d "Le scanner des ranges a echoue sur GitHub (passage ${GITHUB_RUN_ID}). Le rapport de la veille reste en place." \
+            "https://ntfy.sh/${NTFY_TOPIC}" > /dev/null || true

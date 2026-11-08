@@ -1,0 +1,206 @@
+//@version=6
+// Zig Zag "2 bougies"
+// - Bougie verte = clôture > clôture précédente (rendement positif), rouge = clôture < clôture précédente.
+// - Sommet validé par N bougies rouges consécutives après une phase haussière (N = 2 par défaut),
+//   même s'il y a eu d'autres bougies entre-temps. Creux validé par N bougies vertes consécutives.
+// - Le pivot suivant se cherche à partir des N bougies qui ont validé le pivot précédent.
+// - Bougie intérieure de même couleur : ignorée.
+// - Bougie englobée par la suivante de même couleur : annulée (les deux comptent pour une).
+indicator("Zig Zag 2 bougies", overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back = 5000)
+
+// ── Paramètres ─────────────────────────────────────────────
+nbBougies     = input.int(2, "Bougies consécutives pour valider", minval = 1)
+modePivot     = input.string("Plus haut / plus bas de la phase", "Position du pivot", options = ["Plus haut / plus bas de la phase", "Dernière bougie de la séquence"])
+sourcePivot   = input.string("Mèches", "Placer les pivots sur", options = ["Mèches", "Corps"])
+ignorerInter  = input.bool(true, "Bougies intérieures / englobées de même couleur ne comptent pas")
+corpsMin      = input.float(0.0, "Rendement minimum (x ATR) — en dessous = neutre", minval = 0, step = 0.05)
+ignorerDoji   = input.bool(false, "Les bougies neutres ne cassent pas la séquence")
+couleur       = input.color(color.blue, "Couleur de la ligne")
+epaisseur     = input.int(2, "Épaisseur", minval = 1, maxval = 5)
+afficherPrix  = input.bool(true, "Afficher le prix des pivots")
+afficherCours = input.bool(true, "Afficher le segment en cours (non validé)")
+afficherValid = input.bool(true, "Marquer la bougie de validation")
+debug         = input.bool(false, "Mode diagnostic")
+
+dernier = modePivot == "Dernière bougie de la séquence"
+
+// ── Couleur des bougies = rendement ───────────────────────
+couleurBougie = close > close[1] ? 1 : close < close[1] ? -1 : 0
+
+// ── Bougies intérieures et englobantes (même couleur que la bougie mère) ──
+var float mereHaut    = na
+var float mereBas     = na
+var int   mereCouleur = 0      // 1 = verte, -1 = rouge, 0 = neutre
+memeCouleur = couleurBougie != 0 and couleurBougie == mereCouleur
+dansMere    = not na(mereHaut) and high <= mereHaut and low >= mereBas
+englobeMere = not na(mereHaut) and high >= mereHaut and low <= mereBas
+bool interieure = ignorerInter and memeCouleur and dansMere
+bool englobante = ignorerInter and memeCouleur and englobeMere and not interieure
+if not interieure
+    mereHaut    := high
+    mereBas     := low
+    mereCouleur := couleurBougie
+
+// ── Bougies et prix utilisés ──────────────────────────────
+atr   = ta.atr(14)
+petit = math.abs(close - close[1]) < corpsMin * atr
+bull  = couleurBougie == 1  and not petit and not interieure
+bear  = couleurBougie == -1 and not petit and not interieure
+
+hautP = sourcePivot == "Mèches" ? high : math.max(open, close)
+basP  = sourcePivot == "Mèches" ? low  : math.min(open, close)
+
+// ── Comptage des bougies consécutives (+ début de chaque séquence) ──
+var int cntBull   = 0
+var int cntBear   = 0
+var int debutBull = na      // première bougie de la séquence verte en cours
+var int debutBear = na      // première bougie de la séquence rouge en cours
+if not interieure
+    if bull
+        if not englobante        // une bougie englobante remplace la précédente : pas de +1
+            cntBull += 1
+            if cntBull == 1
+                debutBull := bar_index
+        cntBear := 0
+    else if bear
+        if not englobante
+            cntBear += 1
+            if cntBear == 1
+                debutBear := bar_index
+        cntBull := 0
+    else if not ignorerDoji
+        cntBull := 0
+        cntBear := 0
+
+// Pour l'initialisation
+hiN    = ta.highest(hautP, nbBougies)
+hiNoff = ta.highestbars(hautP, nbBougies)
+loN    = ta.lowest(basP, nbBougies)
+loNoff = ta.lowestbars(basP, nbBougies)
+
+// ── État ───────────────────────────────────────────────────
+var int   dir      = 0      // 1 = phase haussière, -1 = phase baissière
+var float extPrix  = na     // extrême de la phase
+var int   extBar   = na
+var float candPrix = na     // dernière verte (phase haussière) ou dernière rouge (phase baissière)
+var int   candBar  = na
+var float pivPrix  = na     // dernier pivot validé
+var int   pivBar   = na
+var line  ligneCours = na
+
+bool nouveauSommet = false
+bool nouveauCreux  = false
+
+if dir == 0
+    if cntBull >= nbBougies
+        dir      := 1
+        pivPrix  := loN
+        pivBar   := bar_index + loNoff
+        extPrix  := hiN
+        extBar   := bar_index + hiNoff
+        candPrix := hautP
+        candBar  := bar_index
+    else if cntBear >= nbBougies
+        dir      := -1
+        pivPrix  := hiN
+        pivBar   := bar_index + hiNoff
+        extPrix  := loN
+        extBar   := bar_index + loNoff
+        candPrix := basP
+        candBar  := bar_index
+else if dir == 1
+    if not interieure and (na(extPrix) or hautP >= extPrix)
+        extPrix := hautP
+        extBar  := bar_index
+    if bull
+        candPrix := hautP
+        candBar  := bar_index
+    if cntBear >= nbBougies
+        // Sommet validé
+        float px = dernier ? candPrix : extPrix
+        int   bx = dernier ? candBar  : extBar
+        if na(px)
+            px := hautP
+            bx := bar_index
+        line.new(pivBar, pivPrix, bx, px, color = couleur, width = epaisseur)
+        if afficherPrix
+            label.new(bx, px, str.tostring(px, format.mintick), style = label.style_label_down, color = color.new(couleur, 100), textcolor = couleur, size = size.small)
+        pivPrix := px
+        pivBar  := bx
+        dir     := -1
+        nouveauSommet := true
+        // Plus bas cherché à partir des rouges qui ont validé le sommet (jamais sur la bougie du sommet)
+        int debut = math.max(na(debutBear) ? bar_index : debutBear, pivBar + 1)
+        float lo = na
+        int loBar = na
+        int nb = bar_index - debut
+        if nb >= 0
+            for i = 0 to nb
+                if not interieure[i] and (na(lo) or basP[i] < lo)
+                    lo := basP[i]
+                    loBar := bar_index - i
+        extPrix  := lo
+        extBar   := loBar
+        candPrix := basP
+        candBar  := bar_index
+else
+    if not interieure and (na(extPrix) or basP <= extPrix)
+        extPrix := basP
+        extBar  := bar_index
+    if bear
+        candPrix := basP
+        candBar  := bar_index
+    if cntBull >= nbBougies
+        // Creux validé
+        float px = dernier ? candPrix : extPrix
+        int   bx = dernier ? candBar  : extBar
+        if na(px)
+            px := basP
+            bx := bar_index
+        line.new(pivBar, pivPrix, bx, px, color = couleur, width = epaisseur)
+        if afficherPrix
+            label.new(bx, px, str.tostring(px, format.mintick), style = label.style_label_up, color = color.new(couleur, 100), textcolor = couleur, size = size.small)
+        pivPrix := px
+        pivBar  := bx
+        dir     := 1
+        nouveauCreux := true
+        // Plus haut cherché à partir des vertes qui ont validé le creux (jamais sur la bougie du creux)
+        int debut = math.max(na(debutBull) ? bar_index : debutBull, pivBar + 1)
+        float hi = na
+        int hiBar = na
+        int nb = bar_index - debut
+        if nb >= 0
+            for i = 0 to nb
+                if not interieure[i] and (na(hi) or hautP[i] > hi)
+                    hi := hautP[i]
+                    hiBar := bar_index - i
+        extPrix  := hi
+        extBar   := hiBar
+        candPrix := hautP
+        candBar  := bar_index
+
+// ── Segment en cours (pointillé) ──────────────────────────
+if afficherCours and barstate.islast and dir != 0
+    line.delete(ligneCours)
+    float pxC = dernier ? candPrix : extPrix
+    int   bxC = dernier ? candBar  : extBar
+    if not na(pxC)
+        ligneCours := line.new(pivBar, pivPrix, bxC, pxC, color = color.new(couleur, 40), width = 1, style = line.style_dashed)
+
+// ── Repères de validation ─────────────────────────────────
+plotshape(afficherValid and nouveauSommet, "Sommet validé", shape.triangledown, location.abovebar, color.red, size = size.tiny)
+plotshape(afficherValid and nouveauCreux, "Creux validé", shape.triangleup, location.belowbar, color.green, size = size.tiny)
+
+// ── Diagnostic ─────────────────────────────────────────────
+plotchar(debug and bull, "Verte comptée", "V", location.belowbar, color.green, size = size.tiny)
+plotchar(debug and bear, "Rouge comptée", "R", location.abovebar, color.red, size = size.tiny)
+plotchar(debug and interieure, "Intérieure ignorée", "I", location.abovebar, color.orange, size = size.tiny)
+plotchar(debug and englobante, "Englobe la précédente (qui est annulée)", "E", location.top, color.purple, size = size.tiny)
+plotchar(debug and not interieure and not bull and not bear, "Neutre", "N", location.abovebar, color.gray, size = size.tiny)
+
+// Phase en couleur de fond : vert = phase haussière (cherche un sommet), rouge = phase baissière (cherche un creux)
+bgcolor(debug ? (dir == 1 ? color.new(color.green, 85) : dir == -1 ? color.new(color.red, 85) : na) : na, title = "Phase")
+
+// ── Alertes ────────────────────────────────────────────────
+alertcondition(nouveauSommet, "Sommet validé", "Zig Zag 2 bougies : nouveau sommet validé")
+alertcondition(nouveauCreux, "Creux validé", "Zig Zag 2 bougies : nouveau creux validé")
