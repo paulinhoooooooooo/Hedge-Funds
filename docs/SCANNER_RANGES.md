@@ -116,3 +116,8 @@ rapport indique où il a été trouvé.
 - **Le retour au milieu entre chaque touche** : tu voulais qu'on en reparle. Pour l'instant, il faut
   un retour au 0,5 après chaque touche, et la 2e touche suivie d'un retour au milieu déclenche l'alerte.
 - Les 3e touches sont comptées dans le rapport, mais elles n'envoient pas d'alerte.
+- **Volume d'alertes.** Le premier passage complet (08/11/2026, environ 25 min pour 522 actifs) a
+  trouvé 104 alertes sur les 5 derniers jours : environ 60 en 4h, 35 en D et 22 en W.
+- **Ranges W très anciens.** Après une impulsion énorme, le 1,3 tombe presque à zéro et le range ne
+  meurt plus. Exemple : MRNA, range 117 → 497 de 2021, 2e touche en 2022, retour au milieu en novembre
+  2026. Faut-il un âge maximal du range, ou un délai maximal entre la 2e touche et le retour au milieu ?

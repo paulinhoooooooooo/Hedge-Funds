@@ -544,21 +544,30 @@ def rapport(lignes: list[dict], nouvelles: list[dict], maintenant: pd.Timestamp,
     return "\n".join(out)
 
 
-def message_notification(nouvelles: list[dict], lien: Optional[str]) -> tuple[str, str]:
+def message_notification(nouvelles: list[dict], lien: Optional[str], max_lignes: int = 35) -> tuple[str, str]:
+    """Titre et texte de la notification : une ligne par alerte, regroupées par unité de temps."""
     titre = (f"Ranges : {len(nouvelles)} modèle à 2 touches" if len(nouvelles) == 1
              else f"Ranges : {len(nouvelles)} modèles à 2 touches")
-    lignes = []
-    for a in nouvelles[:25]:
-        icone = "📉" if a["cote"] == "haut" else "📈"
-        quand = _date(a[a["cote"] + "_alerte_ts"])
-        lignes.append(f"{icone} **{a['actif']}** ({a['ut']}) {a['modele']} — retour au milieu le {quand}\n"
-                      f"Haut {_p(a['haut'])} · milieu {_p(a['milieu'])} · bas {_p(a['bas'])} · "
-                      f"cours {_p(a['cours'])}\n{_zone_txt(a, a['cote'])}")
-    if len(nouvelles) > 25:
-        lignes.append(f"… et {len(nouvelles) - 25} autres dans le rapport.")
+    blocs = []
+    montrees = 0
+    for ut in UTS:
+        du_ut = sorted((a for a in nouvelles if a["ut"] == ut), key=lambda a: (a["cote"], a["actif"]))
+        if not du_ut:
+            continue
+        lignes = [f"**{ut}**"]
+        for a in du_ut:
+            if montrees == max_lignes:
+                break
+            icone = "📉" if a["cote"] == "haut" else "📈"
+            lignes.append(f"{icone} {a['actif']} {a['modele']} · haut {_p(a['haut'])} · milieu {_p(a['milieu'])} · "
+                          f"bas {_p(a['bas'])} · cours {_p(a['cours'])}")
+            montrees += 1
+        blocs.append("\n".join(lignes))
+    if len(nouvelles) > montrees:
+        blocs.append(f"… et {len(nouvelles) - montrees} autres dans le rapport.")
     if lien:
-        lignes.append(f"\nRapport complet : {lien}")
-    return titre, "\n\n".join(lignes)
+        blocs.append(f"Rapport complet (zones, liquidité, dates) : {lien}")
+    return titre, "\n\n".join(blocs)
 
 
 def lire_etat(chemin: Optional[Path]) -> dict:

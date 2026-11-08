@@ -96,7 +96,12 @@ def test_rapport_et_notification():
     assert "zone 265,90–268,10 (D)" in texte
     titre, corps = sr.message_notification(nouvelles, "https://exemple/rapport")
     assert titre == "Ranges : 1 modèle à 2 touches"
-    assert "JNJ" in corps and "milieu 254,20" in corps and "https://exemple/rapport" in corps
+    assert "**D**" in corps and "📉 JNJ distribution · haut 282,00 · milieu 254,20" in corps
+    assert "https://exemple/rapport" in corps
+    beaucoup = [dict(nouvelles[0], actif=f"X{i}") for i in range(70)]
+    titre, corps = sr.message_notification(beaucoup, None)
+    assert titre == "Ranges : 70 modèles à 2 touches" and "… et 35 autres dans le rapport." in corps
+    assert len(corps.encode()) < 3900                               # limite d'un message ntfy
 
 
 def test_prix_lisibles():
