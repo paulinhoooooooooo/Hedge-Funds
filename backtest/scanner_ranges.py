@@ -60,6 +60,7 @@ HISTO_4H_CRYPTO = 365      # la crypto tient en une seule requête groupée
 TRAVAILLEURS = 4           # téléchargements en parallèle (débit Alpaca partagé : 200 requêtes / min)
 MAX_FENETRE_5M = 400       # jours : au-delà, pas de recherche en 5 min (fenêtre trop longue)
 JOURS_ALERTE = 5           # une alerte plus ancienne n'est plus envoyée
+SUIVI_SIGNALES = 60         # jours : modèles déjà signalés encore montrés dans le rapport
 GARDE_ALERTES = 90         # jours pendant lesquels on se souvient d'une alerte envoyée
 
 ALPACA_CRYPTO = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
@@ -496,7 +497,8 @@ def rapport(lignes: list[dict], nouvelles: list[dict], maintenant: pd.Timestamp,
             t, arme, al = ln[f"{cote}_touches"], ln[f"{cote}_retour_milieu"], ln[f"{cote}_alerte_ts"]
             if t == 2 and not arme:
                 attente.append((ln, cote))
-            elif al is not None and al < maintenant - pd.Timedelta(days=recent_jours):
+            elif (al is not None and t == 2 and maintenant - pd.Timedelta(days=SUIVI_SIGNALES) <= al
+                  < maintenant - pd.Timedelta(days=recent_jours)):
                 actives.append((ln, cote))
     out = [
         "# Ranges — modèles d'accumulation et de distribution",
@@ -519,7 +521,7 @@ def rapport(lignes: list[dict], nouvelles: list[dict], maintenant: pd.Timestamp,
             "_Pas encore d'alerte : elle partira si le prix revient au 0,5 sans tuer le range._", ""]
     out += ([ENTETE] + [ligne_tableau(ln, c) for ln, c in sorted(attente, key=lambda x: x[0]["actif"])]
             if attente else ["Aucun."])
-    out += ["", "## Modèles déjà signalés, range toujours vivant", ""]
+    out += ["", f"## Modèles signalés ces {SUIVI_SIGNALES} derniers jours, 3e touche attendue", ""]
     out += ([ENTETE] + [ligne_tableau(ln, c) for ln, c in sorted(actives, key=lambda x: (x[0]["ut"], x[0]["actif"]))]
             if actives else ["Aucun."])
     par_ut = {ut: sum(1 for ln in vivants if ln["ut"] == ut) for ut in UTS}
