@@ -1,0 +1,504 @@
+<title>Desk Smart Money</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root {
+  --bg: #f4f6f9; --surface: #ffffff; --ink: #121a24; --muted: #5a6573; --line: #dde3ea;
+  --accent: #2a78d6; --bench: #8a8f98; --buy: #147a47; --buy-bg: #e3f3ea; --sell: #b8352a; --sell-bg: #fbe7e4;
+  --warn: #9a5b00; --warn-bg: #fbefd9; --neutral-bg: #eceff3;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0e131a; --surface: #151c25; --ink: #e5eaf0; --muted: #98a3b1; --line: #263140;
+    --accent: #5b9bf0; --bench: #7d8590; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
+    --warn: #f0b04a; --warn-bg: #36280e; --neutral-bg: #1e2733;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e131a; --surface: #151c25; --ink: #e5eaf0; --muted: #98a3b1; --line: #263140;
+  --accent: #5b9bf0; --bench: #7d8590; --buy: #4cc98a; --buy-bg: #12301f; --sell: #ff7a6b; --sell-bg: #3a1a17;
+  --warn: #f0b04a; --warn-bg: #36280e; --neutral-bg: #1e2733;
+}
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 40px; display: grid; gap: 20px; }
+h1, h2 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; }
+h1 { font-size: 1.9rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.15rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+.source { font-size: 0.85rem; padding: 4px 10px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.source.real { background: var(--buy-bg); color: var(--buy); }
+.asof { color: var(--muted); font-size: 0.9rem; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; }
+.kpi .value { font-family: var(--mono); font-size: 1.45rem; font-variant-numeric: tabular-nums; }
+.kpi .label, .label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.kpi .sub { font-size: 0.82rem; color: var(--muted); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.chart svg { width: 100%; height: auto; display: block; }
+.grid { stroke: var(--line); stroke-width: 1; }
+.axis { fill: var(--muted); font: 11px var(--mono); }
+.line-fund { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+.line-bench { fill: none; stroke: var(--bench); stroke-width: 1.4; }
+.dot-fund { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.end-label { fill: var(--ink); font: 600 12px var(--mono); }
+.end-label.muted { fill: var(--muted); font-weight: 400; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 0.85rem; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; background: var(--accent); }
+.legend span.bench::before { background: var(--bench); }
+.main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.side { display: grid; gap: 20px; }
+@media (max-width: 860px) { .main { grid-template-columns: 1fr; } }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filters button { font: 600 0.85rem var(--body); color: var(--ink); background: var(--neutral-bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.filters button:focus-visible, .ticket:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tickets { display: grid; gap: 12px; }
+.ticket { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 8px; background: var(--surface); }
+.ticket-head, .alert-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.ticket-head time, .alert-head time { margin-left: auto; color: var(--muted); font: 0.85rem var(--mono); }
+.ticker { font: 600 1rem var(--mono); letter-spacing: 0.02em; }
+.chip { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: var(--neutral-bg); color: var(--muted); white-space: nowrap; }
+.chip.buy { background: var(--buy-bg); color: var(--buy); }
+.chip.sell { background: var(--sell-bg); color: var(--sell); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.reasons { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 0.92rem; }
+.history, .status { margin: 0; font-size: 0.92rem; display: grid; gap: 2px; }
+.portfolio-form, .sizing { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--neutral-bg); }
+.portfolio-form label, .sizing label { font-size: 0.9rem; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.portfolio-form input, .sizing input { font: 0.95rem var(--mono); width: 8.5em; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--surface); color: var(--ink); }
+.advice { margin: 0; font-weight: 600; font-size: 0.95rem; }
+.advice:empty { display: none; }
+.alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.alert { border-top: 1px solid var(--line); padding-top: 10px; }
+.alert:first-child { border-top: 0; padding-top: 0; }
+.alert p { margin: 6px 0 0; font-size: 0.9rem; }
+.score { font: 0.85rem var(--mono); color: var(--muted); }
+.bank { display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 10px; }
+.bank:first-child { border-top: 0; padding-top: 0; }
+.bank-name { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-weight: 600; }
+.bank-figures { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.big { font: 600 1.35rem var(--mono); }
+.muted { color: var(--muted); }
+.small, .note { font-size: 0.82rem; }
+.note { color: var(--muted); margin: 0; }
+.empty { color: var(--muted); margin: 0; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.num.pos { color: var(--buy); }
+.num.neg { color: var(--sell); }
+h3.label { margin: 4px 0 0; }
+footer { color: var(--muted); font-size: 0.82rem; }
+@media (prefers-reduced-motion: no-preference) { .ticket { transition: border-color .15s; } .ticket:hover { border-color: var(--accent); } }
+</style>
+<div class="wrap">
+  <div class="top">
+    <h1>Desk Smart Money</h1>
+    <div class="top"><span class="source real">Données réelles</span><span class="asof">Situation au 13/11/2026 · actions américaines</span></div>
+  </div>
+  <section class="kpis" aria-label="État du fonds"><div class="kpi"><span class="label">Rendement annuel · backtest</span><span class="value">+22,0%</span><span class="sub">marché : +14,7%</span></div><div class="kpi"><span class="label">Pire perte · backtest</span><span class="value">-26,7%</span><span class="sub">marché : -33,8%</span></div><div class="kpi"><span class="label">Rendement / risque · backtest</span><span class="value">1,09</span><span class="sub">Sharpe · marché : 0,76</span></div><div class="kpi"><span class="label">Lignes · backtest</span><span class="value">12</span><span class="sub">actions 73% · S&amp;P 500 27%</span></div></section>
+  <section class="panel" aria-label="Portefeuille réel"><h2>Portefeuille réel · depuis le 15/10/2026</h2><p class="note">Démarré à zéro le 15/10/2026, 100 % en espèces. Il suit seulement les signaux publiés depuis : achat ou renforcement = la ligne est complétée jusqu'à un douzième du portefeuille ; allègement = rien ; vente = toute la ligne. L'argent non investi reste en espèces.</p><div class="bank-figures"><span class="big">+0,9%</span><span class="muted">depuis le départ · S&amp;P 500 -2,3% · 5 ligne(s) en actions · espèces 58%</span></div><h3 class="label">Lignes détenues · rendement de chaque action depuis l'achat</h3><div class="table-wrap"><table>
+<thead><tr><th>Titre</th><th class="num">Rendement</th><th class="num">Prix d'achat</th><th class="num">Cours</th><th class="num">Poids</th><th>Acheté le</th></tr></thead>
+<tbody><tr class='live-line' data-asset='VRSK' data-entry='189.210000'><td class='ticker'>VRSK</td><td class='lv-ret num pos'>+9,8%</td><td class='num'>189.21 $</td><td class='lv-px num'>207.82 $</td><td class='num'>9,1%</td><td>19/10/2026</td></tr><tr class='live-line' data-asset='MET' data-entry='99.680000'><td class='ticker'>MET</td><td class='lv-ret num pos'>+3,0%</td><td class='num'>99.68 $</td><td class='lv-px num'>102.65 $</td><td class='num'>8,5%</td><td>15/10/2026</td></tr><tr class='live-line' data-asset='AEP' data-entry='128.880000'><td class='ticker'>AEP</td><td class='lv-ret num pos'>+0,2%</td><td class='num'>128.88 $</td><td class='lv-px num'>129.18 $</td><td class='num'>8,3%</td><td>03/11/2026</td></tr><tr class='live-line' data-asset='NKE' data-entry='37.910000'><td class='ticker'>NKE</td><td class='lv-ret num pos'>+0,2%</td><td class='num'>37.91 $</td><td class='lv-px num'>37.99 $</td><td class='num'>8,3%</td><td>26/10/2026</td></tr><tr class='live-line' data-asset='CI' data-entry='301.480000'><td class='ticker'>CI</td><td class='lv-ret num neg'>-1,5%</td><td class='num'>301.48 $</td><td class='lv-px num'>297.00 $</td><td class='num'>8,2%</td><td>05/11/2026</td></tr></tbody></table></div>
+<p class="note" id='lv-summary'>Rendement moyen des lignes détenues : +2,4% ; 4 en gain, 1 en perte.</p>
+<p class="note" id='lv-status'>Cours de clôture du 13/11/2026 (mise à jour du matin). Pour les cours en direct, lancez le logiciel sur votre ordinateur : <code>python backtest/temps_reel.py</code>.</p><h3 class="label">Historique des mouvements</h3><div class="table-wrap"><table>
+<thead><tr><th>Date</th><th>Mouvement</th><th>Titre</th><th class="num">Prix</th></tr></thead>
+<tbody><tr><td>05/11/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>CI</td><td class='num'>301.48 $</td></tr><tr><td>03/11/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>AEP</td><td class='num'>128.88 $</td></tr><tr><td>26/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>NKE</td><td class='num'>37.91 $</td></tr><tr><td>19/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>VRSK</td><td class='num'>189.21 $</td></tr><tr><td>15/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>MET</td><td class='num'>99.68 $</td></tr></tbody></table></div></section>
+  <section class="panel" aria-label="Portefeuille d'essai"><h2>Portefeuille d'essai · fonds OU radar · depuis le 15/10/2026</h2><p class="note">Essai, sans effet sur le fonds. Même départ et mêmes règles que le portefeuille réel (à zéro le 15/10/2026, un douzième par ligne, vente = toute la ligne), mais les places libres sont prises par les alertes d'accumulation du radar des grands acteurs (les plus fortes d'abord). Vente : décision du fonds, distribution confirmée selon ses règles, ou perte critique. Sur le backtest 2016-2026, ce mélange a rapporté +29 % par an (fonds seul : +23 %) pour une pire chute équivalente ; on vérifie ici s'il fait mieux en vrai.</p><div class="bank-figures"><span class="big">-4,2%</span><span class="muted">depuis le départ · portefeuille réel +0,9% · S&amp;P 500 -2,3% · 12 ligne(s) en actions · espèces 0%</span></div><h3 class="label">Lignes détenues · rendement de chaque action depuis l'achat</h3><div class="table-wrap"><table>
+<thead><tr><th>Titre</th><th class="num">Rendement</th><th class="num">Prix d'achat</th><th class="num">Cours</th><th class="num">Poids</th><th>Acheté le</th></tr></thead>
+<tbody><tr class='essai-line' data-asset='VRSK' data-entry='189.210000'><td class='ticker'>VRSK</td><td class='lv-ret num pos'>+9,8%</td><td class='num'>189.21 $</td><td class='lv-px num'>207.82 $</td><td class='num'>9,5%</td><td>19/10/2026</td></tr><tr class='essai-line' data-asset='MTD' data-entry='1625.730000'><td class='ticker'>MTD</td><td class='lv-ret num pos'>+7,0%</td><td class='num'>1,625.73 $</td><td class='lv-px num'>1,738.91 $</td><td class='num'>9,3%</td><td>19/10/2026</td></tr><tr class='essai-line' data-asset='MET' data-entry='99.680000'><td class='ticker'>MET</td><td class='lv-ret num pos'>+3,0%</td><td class='num'>99.68 $</td><td class='lv-px num'>102.65 $</td><td class='num'>9,0%</td><td>15/10/2026</td></tr><tr class='essai-line' data-asset='PCG' data-entry='12.980000'><td class='ticker'>PCG</td><td class='lv-ret num pos'>+2,1%</td><td class='num'>12.98 $</td><td class='lv-px num'>13.25 $</td><td class='num'>8,8%</td><td>22/10/2026</td></tr><tr class='essai-line' data-asset='IDXX' data-entry='698.550000'><td class='ticker'>IDXX</td><td class='lv-ret num pos'>+0,8%</td><td class='num'>698.55 $</td><td class='lv-px num'>704.23 $</td><td class='num'>7,9%</td><td>04/11/2026</td></tr><tr class='essai-line' data-asset='AGCO' data-entry='111.170000'><td class='ticker'>AGCO</td><td class='lv-ret num pos'>+0,7%</td><td class='num'>111.17 $</td><td class='lv-px num'>111.94 $</td><td class='num'>8,5%</td><td>03/11/2026</td></tr><tr class='essai-line' data-asset='AEP' data-entry='128.880000'><td class='ticker'>AEP</td><td class='lv-ret num pos'>+0,2%</td><td class='num'>128.88 $</td><td class='lv-px num'>129.18 $</td><td class='num'>8,4%</td><td>03/11/2026</td></tr><tr class='essai-line' data-asset='NKE' data-entry='37.910000'><td class='ticker'>NKE</td><td class='lv-ret num pos'>+0,2%</td><td class='num'>37.91 $</td><td class='lv-px num'>37.99 $</td><td class='num'>8,6%</td><td>26/10/2026</td></tr><tr class='essai-line' data-asset='KLAC' data-entry='165.740000'><td class='ticker'>KLAC</td><td class='lv-ret num neg'>-8,1%</td><td class='num'>165.74 $</td><td class='lv-px num'>152.32 $</td><td class='num'>7,9%</td><td>16/10/2026</td></tr><tr class='essai-line' data-asset='TJX' data-entry='146.810000'><td class='ticker'>TJX</td><td class='lv-ret num neg'>-8,5%</td><td class='num'>146.81 $</td><td class='lv-px num'>134.37 $</td><td class='num'>7,9%</td><td>16/10/2026</td></tr><tr class='essai-line' data-asset='VST' data-entry='149.700000'><td class='ticker'>VST</td><td class='lv-ret num neg'>-11,1%</td><td class='num'>149.70 $</td><td class='lv-px num'>133.01 $</td><td class='num'>7,7%</td><td>19/10/2026</td></tr><tr class='essai-line' data-asset='ILMN' data-entry='271.040000'><td class='ticker'>ILMN</td><td class='lv-ret num neg'>-23,6%</td><td class='num'>271.04 $</td><td class='lv-px num'>207.01 $</td><td class='num'>6,5%</td><td>26/10/2026</td></tr></tbody></table></div>
+<p class="note">Rendement moyen des lignes détenues : -2,3% ; 8 en gain, 4 en perte.</p>
+<p class="note">Cours de clôture du 13/11/2026 (mise à jour du matin).</p><h3 class="label">Lignes vendues depuis le départ</h3><div class="table-wrap"><table>
+<thead><tr><th>Titre</th><th class="num">Rendement</th><th>Acheté le</th><th>Vendu le</th></tr></thead>
+<tbody><tr><td class='ticker'>TWLO</td><td class='num neg'>-21,8%</td><td>15/10/2026</td><td>03/11/2026</td></tr></tbody></table></div><h3 class="label">Historique des mouvements</h3><div class="table-wrap"><table>
+<thead><tr><th>Date</th><th>Mouvement</th><th>Titre</th><th class="num">Prix</th></tr></thead>
+<tbody><tr><td>04/11/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>IDXX</td><td class='num'>698.55 $</td></tr><tr><td>03/11/2026</td><td><span class='chip sell'>VENTE</span></td><td class='ticker'>TWLO</td><td class='num'>213.77 $</td></tr><tr><td>03/11/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>AEP</td><td class='num'>128.88 $</td></tr><tr><td>03/11/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>AGCO</td><td class='num'>111.17 $</td></tr><tr><td>26/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>NKE</td><td class='num'>37.91 $</td></tr><tr><td>26/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>ILMN</td><td class='num'>271.04 $</td></tr><tr><td>22/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>PCG</td><td class='num'>12.98 $</td></tr><tr><td>19/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>VRSK</td><td class='num'>189.21 $</td></tr><tr><td>19/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>VST</td><td class='num'>149.70 $</td></tr><tr><td>19/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>MTD</td><td class='num'>1,625.73 $</td></tr><tr><td>16/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>TJX</td><td class='num'>146.81 $</td></tr><tr><td>16/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>KLAC</td><td class='num'>165.74 $</td></tr><tr><td>15/10/2026</td><td><span class='chip buy'>ACHAT</span></td><td class='ticker'>MET</td><td class='num'>99.68 $</td></tr><tr><td>15/10/2026</td><td><span class='chip buy'>ACHAT · RADAR</span></td><td class='ticker'>TWLO</td><td class='num'>273.40 $</td></tr></tbody></table></div></section>
+  <section class="panel chart" aria-label="Courbe du fonds">
+    <h2>Backtest depuis 2016 · le fonds face au marché</h2>
+    <svg viewBox="0 0 640 200" role="img" aria-label="Valeur du fonds et du marché, base 100">
+  <line x1="44" x2="570" y1="174.0" y2="174.0" class="grid"/><text x="38" y="178.0" class="axis" text-anchor="end">50</text><line x1="44" x2="570" y1="165.0" y2="165.0" class="grid"/><text x="38" y="169.0" class="axis" text-anchor="end">100</text><line x1="44" x2="570" y1="156.0" y2="156.0" class="grid"/><text x="38" y="160.0" class="axis" text-anchor="end">150</text><line x1="44" x2="570" y1="147.0" y2="147.0" class="grid"/><text x="38" y="151.0" class="axis" text-anchor="end">200</text><line x1="44" x2="570" y1="138.0" y2="138.0" class="grid"/><text x="38" y="142.0" class="axis" text-anchor="end">250</text><line x1="44" x2="570" y1="129.0" y2="129.0" class="grid"/><text x="38" y="133.0" class="axis" text-anchor="end">300</text><line x1="44" x2="570" y1="120.0" y2="120.0" class="grid"/><text x="38" y="124.0" class="axis" text-anchor="end">350</text><line x1="44" x2="570" y1="111.0" y2="111.0" class="grid"/><text x="38" y="115.0" class="axis" text-anchor="end">400</text><line x1="44" x2="570" y1="102.0" y2="102.0" class="grid"/><text x="38" y="106.0" class="axis" text-anchor="end">450</text><line x1="44" x2="570" y1="93.0" y2="93.0" class="grid"/><text x="38" y="97.0" class="axis" text-anchor="end">500</text><line x1="44" x2="570" y1="84.0" y2="84.0" class="grid"/><text x="38" y="88.0" class="axis" text-anchor="end">550</text><line x1="44" x2="570" y1="75.0" y2="75.0" class="grid"/><text x="38" y="79.0" class="axis" text-anchor="end">600</text><line x1="44" x2="570" y1="66.0" y2="66.0" class="grid"/><text x="38" y="70.0" class="axis" text-anchor="end">650</text><line x1="44" x2="570" y1="57.0" y2="57.0" class="grid"/><text x="38" y="61.0" class="axis" text-anchor="end">700</text><line x1="44" x2="570" y1="48.0" y2="48.0" class="grid"/><text x="38" y="52.0" class="axis" text-anchor="end">750</text><line x1="44" x2="570" y1="39.0" y2="39.0" class="grid"/><text x="38" y="43.0" class="axis" text-anchor="end">800</text><line x1="44" x2="570" y1="30.0" y2="30.0" class="grid"/><text x="38" y="34.0" class="axis" text-anchor="end">850</text><line x1="44" x2="570" y1="21.0" y2="21.0" class="grid"/><text x="38" y="25.0" class="axis" text-anchor="end">900</text><line x1="44" x2="570" y1="12.0" y2="12.0" class="grid"/><text x="38" y="16.0" class="axis" text-anchor="end">950</text><text x="44.0" y="194" class="axis" text-anchor="middle">2016</text><text x="91.4" y="194" class="axis" text-anchor="middle">2017</text><text x="140.7" y="194" class="axis" text-anchor="middle">2018</text><text x="189.0" y="194" class="axis" text-anchor="middle">2019</text><text x="237.3" y="194" class="axis" text-anchor="middle">2020</text><text x="285.6" y="194" class="axis" text-anchor="middle">2021</text><text x="334.0" y="194" class="axis" text-anchor="middle">2022</text><text x="382.3" y="194" class="axis" text-anchor="middle">2023</text><text x="431.5" y="194" class="axis" text-anchor="middle">2024</text><text x="479.9" y="194" class="axis" text-anchor="middle">2025</text><text x="528.2" y="194" class="axis" text-anchor="middle">2026</text>
+  <path d="M44.0,165.8 L44.9,166.2 L45.9,165.9 L46.8,165.7 L47.7,166.2 L48.6,166.3 L49.6,165.8 L50.5,165.5 L51.4,165.1 L52.4,164.8 L53.3,164.7 L54.2,164.8 L55.2,164.5 L56.1,164.7 L57.0,164.4 L57.9,164.3 L58.9,164.5 L59.8,164.6 L60.7,164.7 L61.7,164.6 L62.6,164.2 L63.5,164.2 L64.4,164.2 L65.4,164.4 L66.3,164.7 L67.2,164.1 L68.2,163.9 L69.1,163.6 L70.0,163.4 L71.0,163.5 L71.9,163.4 L72.8,163.3 L73.7,163.3 L74.7,163.4 L75.6,163.3 L76.5,163.8 L77.5,163.7 L78.4,163.5 L79.3,163.4 L80.2,163.5 L81.2,163.7 L82.1,163.7 L83.0,163.8 L84.0,164.1 L84.9,163.4 L85.8,163.2 L86.7,163.0 L87.7,163.1 L88.6,162.5 L89.5,162.5 L90.5,162.5 L91.4,162.7 L92.3,162.3 L93.3,162.3 L94.2,162.4 L95.1,162.2 L96.0,162.1 L97.0,161.9 L97.9,161.6 L98.8,161.5 L99.8,161.3 L100.7,161.4 L101.6,161.3 L102.5,161.6 L103.5,161.5 L104.4,161.5 L105.3,161.7 L106.3,161.6 L107.2,161.2 L108.1,161.1 L109.1,161.2 L110.0,161.2 L110.9,160.9 L111.8,160.7 L112.8,160.7 L113.7,160.7 L114.6,160.7 L115.6,160.8 L116.5,160.8 L117.4,160.5 L118.3,160.3 L119.3,160.3 L120.2,160.3 L121.1,160.6 L122.1,160.7 L123.0,160.5 L123.9,160.2 L124.9,160.4 L125.8,160.0 L126.7,160.0 L127.6,159.8 L128.6,159.5 L129.5,159.5 L130.4,159.3 L131.4,159.2 L132.3,159.1 L133.2,159.2 L134.1,159.2 L135.1,159.0 L136.0,158.6 L136.9,158.5 L137.9,158.3 L138.8,158.2 L139.7,158.2 L140.7,157.6 L141.6,157.2 L142.5,157.0 L143.4,156.4 L144.4,157.4 L145.3,158.7 L146.2,157.7 L147.2,157.5 L148.1,158.0 L149.0,157.1 L149.9,157.5 L150.9,159.0 L151.8,158.5 L152.7,158.8 L153.7,158.3 L154.6,158.2 L155.5,158.2 L156.4,158.2 L157.4,157.6 L158.3,157.7 L159.2,157.6 L160.2,157.5 L161.1,157.1 L162.0,157.2 L163.0,157.4 L163.9,157.7 L164.8,157.4 L165.7,157.0 L166.7,156.9 L167.6,156.8 L168.5,156.6 L169.5,156.6 L170.4,156.5 L171.3,156.2 L172.2,156.0 L173.2,156.2 L174.1,155.9 L175.0,155.7 L176.0,155.8 L176.9,156.1 L177.8,157.2 L178.8,157.2 L179.7,158.2 L180.6,157.6 L181.5,157.0 L182.5,157.4 L183.4,158.4 L184.3,157.2 L185.3,158.3 L186.2,158.6 L187.1,160.4 L188.0,159.7 L189.0,159.2 L189.9,158.6 L190.8,157.9 L191.8,158.0 L192.7,157.6 L193.6,157.5 L194.6,156.9 L195.5,156.7 L196.4,156.6 L197.3,157.2 L198.3,156.4 L199.2,156.6 L200.1,156.3 L201.1,155.7 L202.0,155.6 L202.9,155.6 L203.8,155.3 L204.8,155.2 L205.7,155.8 L206.6,156.0 L207.6,156.3 L208.5,157.0 L209.4,155.8 L210.3,155.7 L211.3,155.1 L212.2,155.2 L213.1,154.7 L214.1,154.4 L215.0,154.8 L215.9,154.3 L216.9,155.2 L217.8,155.3 L218.7,155.6 L219.6,155.9 L220.6,155.2 L221.5,154.7 L222.4,154.4 L223.4,154.6 L224.3,154.8 L225.2,154.9 L226.1,154.7 L227.1,154.6 L228.0,154.2 L228.9,153.8 L229.9,153.5 L230.8,153.2 L231.7,153.3 L232.7,153.0 L233.6,153.0 L234.5,152.7 L235.4,152.2 L236.4,152.0 L237.3,152.1 L238.2,151.8 L239.2,151.2 L240.1,151.5 L241.0,152.1 L241.9,151.1 L242.9,150.6 L243.8,151.0 L244.7,154.6 L245.7,154.5 L246.6,157.1 L247.5,160.9 L248.5,158.5 L249.4,159.1 L250.3,156.2 L251.2,155.4 L252.2,155.7 L253.1,155.7 L254.0,154.8 L255.0,155.4 L255.9,154.5 L256.8,153.6 L257.7,152.2 L258.7,153.6 L259.6,153.1 L260.5,153.9 L261.5,152.8 L262.4,152.2 L263.3,151.8 L264.3,151.9 L265.2,151.4 L266.1,150.6 L267.0,150.4 L268.0,150.1 L268.9,149.0 L269.8,149.8 L270.8,150.6 L271.7,150.8 L272.6,151.0 L273.5,150.5 L274.5,149.3 L275.4,149.2 L276.3,149.4 L277.3,151.2 L278.2,148.9 L279.1,148.2 L280.0,148.4 L281.0,147.6 L281.9,147.0 L282.8,147.4 L283.8,146.9 L284.7,147.0 L285.6,146.4 L286.6,145.8 L287.5,146.3 L288.4,145.6 L289.3,146.8 L290.3,145.1 L291.2,144.6 L292.1,144.9 L293.1,145.9 L294.0,145.5 L294.9,144.5 L295.8,144.8 L296.8,144.2 L297.7,143.7 L298.6,142.7 L299.6,142.1 L300.5,142.2 L301.4,142.1 L302.4,141.6 L303.3,142.2 L304.2,142.3 L305.1,141.8 L306.1,141.6 L307.0,141.4 L307.9,142.2 L308.9,141.1 L309.8,140.4 L310.7,140.2 L311.6,140.6 L312.6,139.7 L313.5,139.9 L314.4,139.5 L315.4,139.2 L316.3,139.4 L317.2,138.7 L318.2,138.5 L319.1,139.2 L320.0,139.5 L320.9,139.2 L321.9,140.2 L322.8,139.8 L323.7,139.0 L324.7,138.3 L325.6,137.7 L326.5,136.8 L327.4,136.9 L328.4,136.8 L329.3,137.7 L330.2,138.3 L331.2,136.6 L332.1,137.5 L333.0,136.4 L334.0,136.0 L334.9,136.9 L335.8,137.0 L336.7,139.6 L337.7,139.3 L338.6,138.6 L339.5,139.4 L340.5,140.0 L341.4,139.7 L342.3,140.2 L343.2,141.4 L344.2,138.9 L345.1,138.1 L346.0,138.0 L347.0,138.6 L347.9,139.5 L348.8,140.7 L349.7,142.1 L350.7,142.2 L351.6,143.1 L352.5,144.3 L353.5,141.8 L354.4,142.2 L355.3,144.3 L356.3,146.5 L357.2,144.1 L358.1,145.0 L359.0,144.2 L360.0,144.6 L360.9,143.6 L361.8,141.9 L362.8,141.8 L363.7,140.4 L364.6,140.9 L365.5,142.6 L366.5,143.9 L367.4,142.5 L368.3,144.4 L369.3,146.2 L370.2,147.2 L371.1,146.7 L372.1,147.2 L373.0,145.5 L373.9,144.0 L374.8,145.3 L375.8,143.1 L376.7,143.3 L377.6,142.7 L378.6,142.3 L379.5,143.6 L380.4,144.4 L381.3,144.5 L382.3,144.5 L383.2,144.0 L384.1,142.9 L385.1,143.2 L386.0,142.2 L386.9,141.5 L387.9,142.0 L388.8,142.0 L389.7,143.1 L390.6,142.3 L391.6,144.2 L392.5,143.6 L393.4,143.0 L394.4,141.7 L395.3,141.7 L396.2,141.4 L397.1,141.4 L398.1,141.0 L399.0,141.3 L399.9,141.4 L400.9,140.7 L401.8,140.6 L402.7,139.8 L403.7,139.6 L404.6,138.5 L405.5,139.1 L406.4,138.1 L407.4,138.6 L408.3,137.5 L409.2,137.2 L410.2,136.7 L411.1,137.7 L412.0,137.8 L412.9,138.8 L413.9,138.4 L414.8,137.3 L415.7,137.8 L416.7,137.9 L417.6,139.2 L418.5,139.5 L419.4,139.3 L420.4,139.1 L421.3,140.2 L422.2,141.2 L423.2,138.8 L424.1,138.2 L425.0,137.2 L426.0,136.7 L426.9,136.3 L427.8,136.2 L428.7,135.1 L429.7,134.6 L430.6,134.5 L431.5,135.2 L432.5,134.3 L433.4,133.7 L434.3,133.2 L435.2,132.5 L436.2,131.8 L437.1,132.0 L438.0,131.1 L439.0,130.6 L439.9,130.7 L440.8,130.8 L441.8,129.6 L442.7,129.4 L443.6,129.9 L444.5,130.7 L445.5,132.3 L446.4,130.9 L447.3,130.6 L448.3,129.6 L449.2,128.8 L450.1,128.8 L451.0,129.0 L452.0,128.3 L452.9,127.4 L453.8,127.0 L454.8,127.1 L455.7,126.0 L456.6,125.5 L457.6,126.6 L458.5,127.1 L459.4,128.2 L460.3,128.2 L461.3,126.0 L462.2,125.2 L463.1,125.1 L464.1,127.5 L465.0,125.2 L465.9,124.4 L466.8,124.1 L467.8,123.9 L468.7,123.3 L469.6,122.7 L470.6,123.3 L471.5,124.1 L472.4,121.3 L473.3,122.6 L474.3,121.6 L475.2,120.9 L476.1,120.3 L477.1,120.7 L478.0,121.9 L478.9,121.5 L479.9,121.8 L480.8,123.0 L481.7,121.2 L482.6,120.1 L483.6,120.8 L484.5,120.9 L485.4,119.9 L486.4,121.0 L487.3,121.5 L488.2,123.4 L489.1,124.8 L490.1,124.5 L491.0,125.4 L491.9,130.6 L492.9,127.6 L493.8,128.4 L494.7,125.9 L495.7,124.2 L496.6,124.5 L497.5,121.4 L498.4,122.9 L499.4,121.9 L500.3,120.8 L501.2,121.1 L502.2,121.2 L503.1,119.0 L504.0,117.9 L504.9,118.1 L505.9,117.7 L506.8,116.7 L507.7,118.3 L508.7,116.7 L509.6,116.1 L510.5,115.9 L511.5,115.9 L512.4,115.7 L513.3,114.6 L514.2,113.8 L515.2,114.0 L516.1,113.2 L517.0,114.9 L518.0,113.7 L518.9,112.3 L519.8,111.8 L520.7,113.0 L521.7,112.9 L522.6,114.2 L523.5,111.7 L524.5,111.5 L525.4,111.9 L526.3,111.8 L527.3,110.8 L528.2,111.5 L529.1,110.4 L530.0,110.6 L531.0,110.9 L531.9,110.6 L532.8,110.7 L533.8,111.7 L534.7,110.9 L535.6,111.2 L536.5,112.6 L537.5,113.7 L538.4,114.9 L539.3,116.5 L540.3,114.2 L541.2,111.7 L542.1,108.5 L543.0,108.1 L544.0,107.4 L544.9,105.6 L545.8,105.4 L546.8,104.8 L547.7,103.6 L548.6,105.6 L549.6,105.2 L550.5,104.4 L551.4,106.3 L552.3,104.6 L553.3,103.6 L554.2,104.8 L555.1,105.3 L556.1,104.4 L557.0,101.7 L557.9,101.3 L558.8,102.4 L559.8,102.1 L560.7,102.0 L561.6,102.6 L562.6,102.7 L563.5,101.7 L564.4,101.8 L565.4,100.9 L566.3,102.5 L567.2,102.9 L568.1,103.3 L569.1,105.5 L570.0,103.4" class="line-bench"/>
+  <path d="M44.0,165.8 L44.9,166.2 L45.9,165.9 L46.8,165.7 L47.7,166.2 L48.6,166.3 L49.6,165.8 L50.5,165.5 L51.4,165.1 L52.4,164.8 L53.3,164.7 L54.2,164.8 L55.2,164.5 L56.1,164.7 L57.0,164.4 L57.9,164.3 L58.9,164.5 L59.8,164.6 L60.7,164.7 L61.7,164.6 L62.6,164.2 L63.5,164.2 L64.4,164.2 L65.4,164.4 L66.3,164.7 L67.2,164.1 L68.2,163.9 L69.1,163.6 L70.0,163.4 L71.0,163.5 L71.9,163.4 L72.8,163.3 L73.7,163.3 L74.7,163.4 L75.6,163.3 L76.5,163.8 L77.5,163.7 L78.4,163.5 L79.3,163.4 L80.2,163.5 L81.2,163.7 L82.1,163.7 L83.0,163.8 L84.0,164.1 L84.9,163.4 L85.8,163.2 L86.7,163.0 L87.7,163.1 L88.6,162.5 L89.5,162.5 L90.5,162.5 L91.4,162.7 L92.3,162.3 L93.3,162.3 L94.2,162.4 L95.1,162.2 L96.0,162.1 L97.0,161.9 L97.9,161.6 L98.8,161.5 L99.8,161.3 L100.7,161.4 L101.6,161.3 L102.5,161.6 L103.5,161.5 L104.4,161.5 L105.3,161.7 L106.3,161.6 L107.2,161.2 L108.1,161.1 L109.1,161.2 L110.0,161.2 L110.9,160.9 L111.8,160.7 L112.8,160.7 L113.7,160.7 L114.6,160.7 L115.6,160.8 L116.5,160.8 L117.4,160.5 L118.3,160.3 L119.3,160.3 L120.2,160.3 L121.1,160.6 L122.1,160.7 L123.0,160.5 L123.9,160.2 L124.9,160.4 L125.8,160.0 L126.7,160.0 L127.6,159.8 L128.6,159.5 L129.5,159.5 L130.4,159.3 L131.4,159.2 L132.3,159.1 L133.2,159.2 L134.1,159.2 L135.1,159.0 L136.0,158.6 L136.9,158.5 L137.9,158.3 L138.8,158.2 L139.7,158.2 L140.7,157.6 L141.6,157.2 L142.5,157.0 L143.4,156.4 L144.4,157.4 L145.3,158.7 L146.2,157.7 L147.2,157.5 L148.1,158.0 L149.0,157.1 L149.9,157.5 L150.9,159.0 L151.8,158.5 L152.7,158.8 L153.7,158.3 L154.6,158.2 L155.5,158.2 L156.4,158.2 L157.4,157.6 L158.3,157.7 L159.2,157.6 L160.2,157.5 L161.1,157.1 L162.0,157.2 L163.0,157.4 L163.9,157.7 L164.8,157.4 L165.7,157.0 L166.7,156.9 L167.6,156.8 L168.5,156.6 L169.5,156.6 L170.4,156.4 L171.3,156.2 L172.2,156.1 L173.2,156.3 L174.1,156.0 L175.0,155.8 L176.0,155.8 L176.9,155.9 L177.8,157.1 L178.8,157.2 L179.7,158.3 L180.6,157.8 L181.5,157.5 L182.5,158.3 L183.4,159.0 L184.3,158.1 L185.3,158.5 L186.2,158.8 L187.1,160.2 L188.0,160.1 L189.0,160.0 L189.9,159.4 L190.8,158.9 L191.8,159.0 L192.7,158.3 L193.6,158.2 L194.6,157.6 L195.5,157.3 L196.4,157.4 L197.3,157.7 L198.3,156.9 L199.2,156.7 L200.1,156.5 L201.1,156.0 L202.0,155.9 L202.9,156.2 L203.8,156.0 L204.8,155.7 L205.7,156.3 L206.6,155.9 L207.6,156.5 L208.5,157.0 L209.4,156.2 L210.3,156.0 L211.3,155.6 L212.2,156.0 L213.1,155.5 L214.1,155.3 L215.0,155.7 L215.9,155.6 L216.9,155.7 L217.8,155.4 L218.7,155.4 L219.6,155.3 L220.6,154.1 L221.5,153.6 L222.4,153.5 L223.4,153.5 L224.3,154.2 L225.2,154.2 L226.1,154.1 L227.1,154.0 L228.0,153.2 L228.9,153.0 L229.9,152.9 L230.8,152.8 L231.7,153.4 L232.7,153.1 L233.6,152.9 L234.5,152.4 L235.4,151.5 L236.4,151.3 L237.3,151.0 L238.2,150.3 L239.2,149.4 L240.1,149.4 L241.0,150.5 L241.9,149.4 L242.9,148.1 L243.8,148.4 L244.7,152.0 L245.7,152.3 L246.6,155.9 L247.5,157.1 L248.5,156.4 L249.4,156.9 L250.3,156.4 L251.2,155.8 L252.2,155.5 L253.1,155.7 L254.0,155.2 L255.0,154.9 L255.9,154.1 L256.8,153.2 L257.7,150.5 L258.7,151.5 L259.6,150.4 L260.5,150.6 L261.5,149.6 L262.4,148.9 L263.3,149.4 L264.3,149.3 L265.2,148.8 L266.1,148.5 L267.0,148.5 L268.0,147.4 L268.9,146.4 L269.8,145.4 L270.8,145.8 L271.7,145.0 L272.6,144.2 L273.5,143.9 L274.5,142.4 L275.4,141.8 L276.3,142.3 L277.3,143.9 L278.2,141.6 L279.1,140.8 L280.0,140.3 L281.0,138.2 L281.9,135.9 L282.8,135.8 L283.8,136.0 L284.7,136.0 L285.6,135.9 L286.6,133.2 L287.5,133.6 L288.4,133.6 L289.3,135.7 L290.3,133.3 L291.2,131.4 L292.1,130.9 L293.1,132.4 L294.0,129.9 L294.9,128.3 L295.8,130.3 L296.8,130.3 L297.7,129.8 L298.6,129.8 L299.6,129.4 L300.5,130.3 L301.4,128.6 L302.4,126.8 L303.3,127.6 L304.2,128.9 L305.1,127.7 L306.1,125.4 L307.0,125.8 L307.9,128.1 L308.9,126.0 L309.8,126.6 L310.7,126.8 L311.6,128.6 L312.6,127.8 L313.5,127.1 L314.4,125.6 L315.4,124.7 L316.3,126.3 L317.2,124.1 L318.2,123.4 L319.1,124.6 L320.0,124.3 L320.9,123.8 L321.9,125.4 L322.8,124.4 L323.7,123.0 L324.7,122.1 L325.6,121.3 L326.5,119.3 L327.4,120.7 L328.4,120.4 L329.3,121.8 L330.2,123.6 L331.2,121.5 L332.1,122.0 L333.0,120.8 L334.0,120.3 L334.9,122.3 L335.8,122.8 L336.7,125.5 L337.7,125.4 L338.6,124.9 L339.5,124.4 L340.5,125.2 L341.4,124.6 L342.3,123.7 L343.2,124.3 L344.2,122.8 L345.1,120.8 L346.0,120.5 L347.0,119.8 L347.9,120.2 L348.8,121.2 L349.7,122.4 L350.7,121.4 L351.6,122.9 L352.5,123.6 L353.5,119.3 L354.4,119.4 L355.3,120.6 L356.3,128.3 L357.2,127.2 L358.1,127.8 L359.0,127.3 L360.0,128.1 L360.9,127.7 L361.8,127.6 L362.8,124.9 L363.7,122.9 L364.6,124.3 L365.5,126.1 L366.5,127.8 L367.4,125.0 L368.3,127.4 L369.3,130.6 L370.2,130.9 L371.1,130.5 L372.1,130.8 L373.0,129.7 L373.9,129.4 L374.8,129.7 L375.8,129.3 L376.7,129.6 L377.6,129.6 L378.6,128.5 L379.5,130.3 L380.4,131.1 L381.3,130.9 L382.3,130.9 L383.2,127.8 L384.1,126.1 L385.1,126.5 L386.0,125.1 L386.9,125.1 L387.9,125.9 L388.8,126.0 L389.7,127.9 L390.6,125.0 L391.6,128.3 L392.5,128.1 L393.4,128.7 L394.4,126.2 L395.3,127.8 L396.2,126.9 L397.1,127.0 L398.1,127.1 L399.0,127.0 L399.9,126.2 L400.9,125.4 L401.8,124.8 L402.7,123.4 L403.7,122.6 L404.6,120.7 L405.5,121.6 L406.4,120.1 L407.4,120.7 L408.3,117.7 L409.2,117.1 L410.2,116.2 L411.1,114.7 L412.0,117.1 L412.9,118.2 L413.9,118.0 L414.8,116.0 L415.7,116.7 L416.7,117.0 L417.6,119.0 L418.5,118.2 L419.4,117.9 L420.4,117.3 L421.3,119.0 L422.2,120.4 L423.2,116.3 L424.1,115.1 L425.0,113.9 L426.0,113.6 L426.9,112.5 L427.8,113.8 L428.7,113.0 L429.7,113.3 L430.6,113.4 L431.5,115.8 L432.5,114.0 L433.4,113.8 L434.3,112.5 L435.2,111.0 L436.2,107.4 L437.1,107.4 L438.0,109.0 L439.0,105.2 L439.9,101.7 L440.8,98.2 L441.8,99.4 L442.7,97.4 L443.6,100.0 L444.5,101.6 L445.5,105.3 L446.4,103.1 L447.3,102.1 L448.3,102.1 L449.2,97.9 L450.1,98.6 L451.0,99.2 L452.0,98.3 L452.9,99.3 L453.8,99.3 L454.8,99.6 L455.7,99.4 L456.6,97.2 L457.6,93.0 L458.5,93.7 L459.4,97.2 L460.3,97.4 L461.3,94.8 L462.2,93.3 L463.1,93.6 L464.1,96.8 L465.0,92.3 L465.9,91.4 L466.8,89.3 L467.8,88.6 L468.7,83.9 L469.6,82.8 L470.6,83.4 L471.5,83.8 L472.4,76.4 L473.3,75.4 L474.3,69.2 L475.2,68.7 L476.1,66.2 L477.1,66.7 L478.0,71.3 L478.9,71.8 L479.9,69.7 L480.8,73.3 L481.7,70.8 L482.6,68.3 L483.6,67.7 L484.5,64.9 L485.4,60.3 L486.4,64.3 L487.3,65.7 L488.2,69.4 L489.1,75.9 L490.1,73.9 L491.0,74.6 L491.9,83.6 L492.9,82.0 L493.8,81.1 L494.7,80.0 L495.7,79.4 L496.6,78.9 L497.5,78.6 L498.4,78.3 L499.4,79.1 L500.3,78.6 L501.2,79.5 L502.2,79.2 L503.1,76.0 L504.0,73.6 L504.9,74.5 L505.9,73.3 L506.8,67.2 L507.7,70.5 L508.7,68.3 L509.6,68.0 L510.5,65.5 L511.5,64.7 L512.4,63.1 L513.3,60.8 L514.2,57.0 L515.2,60.1 L516.1,54.5 L517.0,60.4 L518.0,53.6 L518.9,52.3 L519.8,48.2 L520.7,49.5 L521.7,52.4 L522.6,55.0 L523.5,49.3 L524.5,48.6 L525.4,47.7 L526.3,47.8 L527.3,46.0 L528.2,46.6 L529.1,43.7 L530.0,45.5 L531.0,45.1 L531.9,44.4 L532.8,39.9 L533.8,38.8 L534.7,38.5 L535.6,36.3 L536.5,43.8 L537.5,43.5 L538.4,43.0 L539.3,41.2 L540.3,37.4 L541.2,32.8 L542.1,29.1 L543.0,27.6 L544.0,24.2 L544.9,21.4 L545.8,20.9 L546.8,17.6 L547.7,14.1 L548.6,17.6 L549.6,23.2 L550.5,24.7 L551.4,26.6 L552.3,23.9 L553.3,22.1 L554.2,26.3 L555.1,28.2 L556.1,26.3 L557.0,21.8 L557.9,21.5 L558.8,22.5 L559.8,22.9 L560.7,21.1 L561.6,25.0 L562.6,24.7 L563.5,23.9 L564.4,25.9 L565.4,22.3 L566.3,22.8 L567.2,17.6 L568.1,27.8 L569.1,30.3 L570.0,27.5" class="line-fund"/>
+  <circle cx="570.0" cy="27.5" r="3.5" class="dot-fund"/>
+  <text x="578.0" y="31.5" class="end-label">864</text>
+  <text x="578.0" y="107.4" class="end-label muted">442</text>
+</svg>
+    <div class="legend"><span>Fonds (après frais)</span><span class="bench">Marché (S&amp;P 500 · SPY)</span></div>
+  </section>
+  <section class="panel" aria-label="Comparaison Pelosi">
+    <h2>Face à Nancy Pelosi</h2>
+    <p class="note">Copie de ses transactions déclarées (greffe de la Chambre des représentants), achetées ou vendues
+    le lendemain de la publication, jusqu'à 45 jours après la transaction. Ses options sont copiées comme des actions
+    (approximation). Période commune depuis septembre 2018 ; moitiés séparées au 01/07/2022.</p>
+    <div class="table-wrap"><table>
+<thead><tr><th>Portefeuille</th><th class="num">Par an</th><th class="num">Pire perte</th><th class="num">Sharpe</th>
+<th class="num">2018-2022</th><th class="num">2022-2026</th></tr></thead>
+<tbody><tr><td>Pelosi elle-même (date de transaction, non copiable)</td><td class='num'>+16,8%</td><td class='num'>-49,0%</td><td class='num'>0,62</td><td class='num'>+7,6%</td><td class='num'>+25,3%</td></tr><tr><td>Copie Pelosi (date de publication)</td><td class='num'>+15,3%</td><td class='num'>-48,3%</td><td class='num'>0,58</td><td class='num'>+4,7%</td><td class='num'>+25,2%</td></tr><tr><td>Copie Pelosi, actions seulement</td><td class='num'>+12,4%</td><td class='num'>-48,6%</td><td class='num'>0,49</td><td class='num'>+4,2%</td><td class='num'>+19,6%</td></tr><tr><td>Notre fonds (Smart Money)</td><td class='num'>+24,0%</td><td class='num'>-26,7%</td><td class='num'>1,10</td><td class='num'>+20,5%</td><td class='num'>+26,7%</td></tr><tr><td>S&amp;P 500 (SPY)</td><td class='num'>+14,2%</td><td class='num'>-33,8%</td><td class='num'>0,69</td><td class='num'>+9,3%</td><td class='num'>+18,4%</td></tr></tbody></table></div>
+    <p class="note">Suivi réel de la copie Pelosi (démarrée vide le même jour que le fonds) : Aucune nouvelle déclaration depuis le départ.</p>
+  </section>
+  <div class="main">
+    <section class="panel" aria-label="Dernières décisions">
+      <h2>Dernières décisions · backtest</h2>
+      <div class="portfolio-form" id="mon-portefeuille" data-weight="0.083333" data-partial="0.500">
+        <label>Valeur totale de mon portefeuille : <input type="number" id="pf-total" min="0" step="100" inputmode="decimal" placeholder="2000"> €</label>
+        <label>Dont déjà investi : <input type="number" id="pf-invested" min="0" step="100" inputmode="decimal" placeholder="1200"> €</label>
+        <p class="note" id="pf-summary">Indiquez la valeur de votre portefeuille pour voir les montants.</p>
+        <p class="note">Règle du portefeuille réel : 12 lignes de même poids ; achat ou renforcement = ligne complétée jusqu'à un douzième ; allègement = rien ; vente = toute la ligne ; l'argent non investi reste en espèces. Vos montants restent dans votre navigateur.</p>
+      </div>
+      <div class="filters" role="group" aria-label="Filtrer les décisions">
+        <button type="button" id="f-all" data-filter="all" aria-pressed="true">Toutes</button>
+        <button type="button" id="f-buy" data-filter="buy" aria-pressed="false">Achats</button>
+        <button type="button" id="f-warn" data-filter="warn" aria-pressed="false">Allègements</button>
+        <button type="button" id="f-sell" data-filter="sell" aria-pressed="false">Ventes</button>
+      </div>
+      <div class="tickets"><article class="ticket" data-kind="buy">
+  <header class="ticket-head">
+    <span class="chip buy">ACHAT</span>
+    <span class="ticker">CI</span>
+    <time>05/11/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : les gérants de référence accumulent, l&#x27;argent entre, et aucune vente massive des grands acteurs n&#x27;est visible.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 4 des 50 meilleurs gérants suivis ont acheté, 5 ont vendu. Qui achète : Arga Investment Management (nouvelle position); Cibc World Market (+1% d&#x27;actions); Hillsdale Investment Management (+14% d&#x27;actions); Burns Matteson Capital Management (+5% d&#x27;actions). Qui vend : Fora Capital (a tout vendu); Polianta (a tout vendu); Estate Counselors (-2% d&#x27;actions).</li><li>L&#x27;argent entre dans XLF : +22.49% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 268.50 et 288.08 (zone de valeur ; prix le plus échangé 282.90) ; cours 301.48 au-dessus : les grands acheteurs sont en gain et défendent la zone. Volume des hausses / des baisses : 0.83 (vendeurs dominants). 1 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 283.80).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-32% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal d&#x27;achat est apparu 4629 fois sur des actifs de même type. 3 mois après : hausse 6 fois sur 10, +4.4% en moyenne ; 6 mois après : hausse 6 fois sur 10, +9.8% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Toujours en portefeuille : -0.5% depuis l&#x27;achat (après frais).</p>
+  <div class="sizing" data-mode="buy" data-key="CI-20261105">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans CI : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans CI en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">VRTX</span>
+    <time>05/11/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : les grands acteurs vendent (prix / volume).</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 4.1% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 1 des 50 meilleurs gérants suivis ont acheté, 2 ont vendu. Qui achète : Fora Capital (nouvelle position). Qui vend : Mwa Asset Management (-12% d&#x27;actions); Cibc World Market (-2% d&#x27;actions).</li><li>L&#x27;argent entre dans XLV : +9.68% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 471.89 et 550.94 (zone de valeur ; prix le plus échangé 493.30) ; cours 542.50 à l&#x27;intérieur : le marché est à l&#x27;équilibre sur leur prix de revient. Volume des hausses / des baisses : 1.19 (acheteurs dominants). 5 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 526.66).</li><li>Radar des grands acteurs (score +0.5) : Semaine : volume ×1.9 la normale, pression vendeuse (-0.18). 7 jours d&#x27;accumulation contre 2 de distribution sur 5 semaines (hausses ou baisses sur fort volume). Bourses privées (semaine du 12/10, chiffres FINRA) : 31% du volume (habituellement 25%), plateformes de blocs ×3.3 leur volume habituel, plateformes des banques ×1.5 leur volume habituel ; banques les plus actives : UBS, Goldman Sachs, Morgan Stanley ; semaine dominée par les hausses. Gros blocs : 15 transactions d&#x27;au moins 1 M$ sur 5 séances (185.4 M$, 2.6% des capitaux échangés), 94% à l&#x27;achat, dont 6 hors bourse.</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-32% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6800 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite, le reste est toujours détenu (+5.0% depuis l&#x27;achat).</p>
+  <div class="sizing" data-mode="half" data-key="VRTX-20261105">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans VRTX : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans VRTX en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="sell">
+  <header class="ticket-head">
+    <span class="chip sell">VENTE</span>
+    <span class="ticker">MTCH</span>
+    <time>05/11/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort + les grands acteurs vendent (prix / volume).</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 8.8% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 3 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Fuller &amp; Thaler Asset Management (+9% d&#x27;actions); Hillsdale Investment Management (+3% d&#x27;actions); Burns Matteson Capital Management (nouvelle position).</li><li>L&#x27;argent sort de XLK : -6.59% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 33.80 et 41.27 (zone de valeur ; prix le plus échangé 35.20) ; cours 39.16 à l&#x27;intérieur : le marché est à l&#x27;équilibre sur leur prix de revient. Volume des hausses / des baisses : 0.95 (vendeurs dominants). 5 jour(s) de distribution sur 25 séances. Cours en dessous du prix moyen des acheteurs du trimestre (VWAP 41.46).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-32% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6800 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite puis vendue ensuite.</p>
+  <div class="sizing" data-mode="sell" data-key="MTCH-20261105">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans MTCH : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans MTCH en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="buy">
+  <header class="ticket-head">
+    <span class="chip buy">ACHAT</span>
+    <span class="ticker">AEP</span>
+    <time>03/11/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : les gérants de référence accumulent, l&#x27;argent entre, et aucune vente massive des grands acteurs n&#x27;est visible.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 4 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Seven Grand Managers (nouvelle position); Cibc World Market (+11% d&#x27;actions); Ars Investment Partners (+18% d&#x27;actions); Signature Resources Capital Management (nouvelle position).</li><li>L&#x27;argent entre dans XLU : +23.13% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 119.88 et 131.53 (zone de valeur ; prix le plus échangé 125.46) ; cours 128.88 à l&#x27;intérieur : le marché est à l&#x27;équilibre sur leur prix de revient. Volume des hausses / des baisses : 1.38 (acheteurs dominants). 2 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 122.73).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-32% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal d&#x27;achat est apparu 4626 fois sur des actifs de même type. 3 mois après : hausse 6 fois sur 10, +4.4% en moyenne ; 6 mois après : hausse 6 fois sur 10, +9.8% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Toujours en portefeuille : +1.6% depuis l&#x27;achat (après frais).</p>
+  <div class="sizing" data-mode="buy" data-key="AEP-20261103">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans AEP : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans AEP en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="sell">
+  <header class="ticket-head">
+    <span class="chip sell">VENTE</span>
+    <span class="ticker">FFIV</span>
+    <time>03/11/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort + les grands acteurs vendent (prix / volume).</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 2 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Donoghue Forlines (nouvelle position); Fuller &amp; Thaler Asset Management (+78% d&#x27;actions).</li><li>L&#x27;argent sort de XLK : -5.58% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 376.58 et 433.86 (zone de valeur ; prix le plus échangé 386.13) ; cours 331.15 en dessous : les grands acheteurs sont en perte, risque de sorties. Volume des hausses / des baisses : 0.65 (vendeurs dominants). 5 jour(s) de distribution sur 25 séances. Cours en dessous du prix moyen des acheteurs du trimestre (VWAP 411.81).</li><li>Radar des grands acteurs (score -2.0) : Semaine : volume ×3.4 la normale, pression vendeuse (-0.45). Échanges hors bourse 45% du volume (habituellement 37%). Force relative : -16.9% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-32% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6797 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite puis vendue ensuite.</p>
+  <div class="sizing" data-mode="sell" data-key="FFIV-20261103">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans FFIV : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans FFIV en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">ALNY</span>
+    <time>29/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : les grands acteurs vendent (prix / volume).</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 2 des 50 meilleurs gérants suivis ont acheté, 1 ont vendu. Qui achète : Cibc World Market (nouvelle position); Fora Capital (+17% d&#x27;actions). Qui vend : Emerald Advisers (-43% d&#x27;actions).</li><li>L&#x27;argent entre dans XLV : +6.83% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 211.04 et 289.10 (zone de valeur ; prix le plus échangé 225.68) ; cours 174.00 en dessous : les grands acheteurs sont en perte, risque de sorties. Volume des hausses / des baisses : 0.81 (vendeurs dominants). 1 jour(s) de distribution sur 25 séances. Cours en dessous du prix moyen des acheteurs du trimestre (VWAP 229.53).</li><li>Radar des grands acteurs (score -2.0) : Jour d&#x27;événement (résultats, échéance d&#x27;options ou rééquilibrage d&#x27;indices) : le volume du jour est mécanique et n&#x27;est pas compté. Semaine : volume ×2.4 la normale, pression vendeuse (-0.49). Force relative : -30.7% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6794 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite, le reste est toujours détenu (-18.7% depuis l&#x27;achat).</p>
+  <div class="sizing" data-mode="half" data-key="ALNY-20261029">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans ALNY : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans ALNY en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="buy">
+  <header class="ticket-head">
+    <span class="chip buy">ACHAT</span>
+    <span class="ticker">NKE</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : les gérants de référence accumulent, l&#x27;argent entre, et aucune vente massive des grands acteurs n&#x27;est visible.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 7 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Cibc World Market (+67% d&#x27;actions); Channing Capital Management (+66% d&#x27;actions); Iat Reinsurance Ltd. (nouvelle position); Fora Capital (nouvelle position); Bard Associates (+2% d&#x27;actions).</li><li>L&#x27;argent entre dans XLB : +24.88% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 34.22 et 42.79 (zone de valeur ; prix le plus échangé 35.97) ; cours 37.91 à l&#x27;intérieur : le marché est à l&#x27;équilibre sur leur prix de revient. Volume des hausses / des baisses : 0.58 (vendeurs dominants). 4 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 37.13).</li><li>Radar des grands acteurs (score +1.0) : Mois : volume ×1.9 la normale, pression acheteuse (+0.27). Divergence : sur un mois, le volume des baisses domine (-0.17) alors que le prix monte (+6.0%) — ventes cachées. Force relative : -11.0% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions). Bourses privées (semaine du 28/09, chiffres FINRA) : 14% du volume (habituellement 17%), plateformes de blocs ×2.0 leur volume habituel, plateformes des banques ×2.9 leur volume habituel ; banques les plus actives : Morgan Stanley, UBS, Goldman Sachs ; semaine dominée par les baisses. Positions vendeuses déclarées : +16% depuis le rapport précédent (arrêté au 30/09) — les paris à la baisse augmentent. Gros blocs : 7 transactions d&#x27;au moins 1 M$ sur 5 séances (444.0 M$, 9.7% des capitaux échangés), 90% à l&#x27;achat, dont 3 hors bourse.</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal d&#x27;achat est apparu 4592 fois sur des actifs de même type. 3 mois après : hausse 6 fois sur 10, +4.5% en moyenne ; 6 mois après : hausse 6 fois sur 10, +9.8% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Toujours en portefeuille : -0.6% depuis l&#x27;achat (après frais).</p>
+  <div class="sizing" data-mode="buy" data-key="NKE-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans NKE : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans NKE en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">WDAY</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 1 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Cibc World Market (nouvelle position).</li><li>L&#x27;argent sort de XLK : -6.28% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 114.98 et 184.18 (zone de valeur ; prix le plus échangé 129.97) ; cours 208.50 au-dessus : les grands acheteurs sont en gain et défendent la zone. Volume des hausses / des baisses : 0.93 (vendeurs dominants). 0 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 189.90).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6788 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite, le reste est toujours détenu (+4.2% depuis l&#x27;achat).</p>
+  <div class="sizing" data-mode="half" data-key="WDAY-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans WDAY : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans WDAY en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">VRSK</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 21.4% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 2 des 50 meilleurs gérants suivis ont acheté, 3 ont vendu. Qui achète : Cibc World Market (+66% d&#x27;actions); Independent Wealth Network (nouvelle position). Qui vend : Fora Capital (a tout vendu); Emerald Advisers (-32% d&#x27;actions); Fuller &amp; Thaler Asset Management (-4% d&#x27;actions).</li><li>L&#x27;argent sort de XLK : -6.28% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 165.18 et 187.17 (zone de valeur ; prix le plus échangé 173.24) ; cours 196.19 au-dessus : les grands acheteurs sont en gain et défendent la zone. Volume des hausses / des baisses : 1.12 (acheteurs dominants). 2 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 183.99).</li><li>Radar des grands acteurs (score -0.5) : Bourses privées (semaine du 28/09, chiffres FINRA) : 36% du volume (habituellement 29%), plateformes de blocs ×2.5 leur volume habituel ; banques les plus actives : Morgan Stanley, UBS, Goldman Sachs ; semaine dominée par les baisses.</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6788 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite, le reste est toujours détenu (+3.7% depuis l&#x27;achat).</p>
+  <div class="sizing" data-mode="half" data-key="VRSK-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans VRSK : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans VRSK en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">VEEV</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 100.0% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 3 des 50 meilleurs gérants suivis ont acheté, 2 ont vendu. Qui achète : Cibc World Market (+1387% d&#x27;actions); John G Ullman &amp; Associates (nouvelle position); Burns Matteson Capital Management (nouvelle position). Qui vend : Fora Capital (a tout vendu); Emerald Advisers (a tout vendu).</li><li>L&#x27;argent sort de XLK : -6.28% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 152.56 et 232.03 (zone de valeur ; prix le plus échangé 167.20) ; cours 318.18 au-dessus : les grands acheteurs sont en gain et défendent la zone. Volume des hausses / des baisses : 1.30 (acheteurs dominants). 0 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 265.81).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6788 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite, le reste est toujours détenu (+13.6% depuis l&#x27;achat).</p>
+  <div class="sizing" data-mode="half" data-key="VEEV-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans VEEV : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans VEEV en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="sell">
+  <header class="ticket-head">
+    <span class="chip sell">VENTE</span>
+    <span class="ticker">TTWO</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort + les grands acteurs vendent (prix / volume).</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 21.4% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 4 des 50 meilleurs gérants suivis ont acheté, 1 ont vendu. Qui achète : Cibc World Market (+38% d&#x27;actions); Donoghue Forlines (nouvelle position); Emerald Advisers (+15% d&#x27;actions); Emerald Mutual Fund Advisers Trust (+34% d&#x27;actions). Qui vend : Fora Capital (a tout vendu).</li><li>L&#x27;argent sort de XLK : -6.28% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 214.93 et 260.20 (zone de valeur ; prix le plus échangé 241.94) ; cours 203.35 en dessous : les grands acheteurs sont en perte, risque de sorties. Volume des hausses / des baisses : 0.59 (vendeurs dominants). 2 jour(s) de distribution sur 25 séances. Cours en dessous du prix moyen des acheteurs du trimestre (VWAP 220.65).</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6788 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite puis vendue ensuite.</p>
+  <div class="sizing" data-mode="sell" data-key="TTWO-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans TTWO : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans TTWO en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article><article class="ticket" data-kind="warn">
+  <header class="ticket-head">
+    <span class="chip warn">ALLÈGEMENT</span>
+    <span class="ticker">MTCH</span>
+    <time>26/10/2026</time>
+  </header>
+  <ul class="reasons"><li>Déclencheur : l&#x27;argent sort.</li><li>Les gérants de référence (les 50 gérants aux meilleurs résultats passés, choisis chaque trimestre parmi tous ceux qui déclarent à la SEC) ont, ensemble, augmenté leurs positions de 8.8% en nombre d&#x27;actions (déclarations 13F arrêtées au 30/06/2026, déjà publiées).</li><li>Sur le trimestre arrêté au 30/06/2026 : 3 des 50 meilleurs gérants suivis ont acheté, 0 ont vendu. Qui achète : Fuller &amp; Thaler Asset Management (+9% d&#x27;actions); Hillsdale Investment Management (+3% d&#x27;actions); Burns Matteson Capital Management (nouvelle position).</li><li>L&#x27;argent sort de XLK : -6.28% sur 30 jours.</li><li>Empreinte de marché : sur 6 mois, 70 % du volume s&#x27;est échangé entre 33.80 et 40.33 (zone de valeur ; prix le plus échangé 35.20) ; cours 45.21 au-dessus : les grands acheteurs sont en gain et défendent la zone. Volume des hausses / des baisses : 1.32 (acheteurs dominants). 3 jour(s) de distribution sur 25 séances. Cours au-dessus du prix moyen des acheteurs du trimestre (VWAP 41.14).</li><li>Radar des grands acteurs (score -0.5) : Positions vendeuses déclarées : +17% depuis le rapport précédent (arrêté au 30/09) — les paris à la baisse augmentent.</li><li>Banques sur les contrats à terme : E-mini Nasdaq-100 plus vendeuses que d&#x27;habitude (-35% contre -11%) ; E-mini S&amp;P 500 plus vendeuses que d&#x27;habitude (-33% contre -17%).</li></ul>
+  <p class="history"><span class="label">Historique</span>Depuis 2016, ce signal de vente est apparu 6788 fois sur des actifs de même type. 3 mois après : baisse 4 fois sur 10, +5.4% en moyenne ; 6 mois après : baisse 3 fois sur 10, +10.2% en moyenne.</p>
+  <p class="status"><span class="label">Aujourd'hui</span>Ligne réduite puis vendue ensuite.</p>
+  <div class="sizing" data-mode="half" data-key="MTCH-20261026">
+    <span class="label">Pour vous</span>
+    <label>Montant déjà détenu dans MTCH : <input type="number" min="0" step="10" inputmode="decimal"
+      class="held" aria-label="Montant déjà détenu dans MTCH en euros"> €</label>
+    <p class="advice" aria-live="polite"></p>
+  </div>
+</article></div>
+    </section>
+    <div class="side">
+      <section class="panel" aria-label="Radar des grands acteurs">
+        <h2>Radar des grands acteurs</h2>
+        <p class="note">Volumes anormaux recoupés sur l'heure, le jour, la semaine et le mois, plus les bourses privées, les plateformes des banques, les positions vendeuses, les achats des dirigeants et les franchissements de 5 %.</p>
+        <ul class="alerts"><li class="alert">
+  <div class="alert-head"><span class="chip sell">distribution</span><span class="ticker">SE</span>
+  <span class="score">score -4.5</span><time>13/11</time></div>
+  <p>Semaine : volume ×2.1 la normale, pression vendeuse (-0.37). Mois : volume ×1.9 la normale, pression vendeuse (-0.24). Force relative : -33.2% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions). Bourses privées (semaine du 05/10, chiffres FINRA) : 30% du volume (habituellement 28%), plateformes de blocs ×2.2 leur volume habituel, plateformes des banques ×1.8 leur volume habituel ; banques les plus actives : UBS, Morgan Stanley, Goldman Sachs ; semaine dominée par les baisses.</p></li><li class="alert">
+  <div class="alert-head"><span class="chip buy">accumulation</span><span class="ticker">VFC</span>
+  <span class="score">score +4.5</span><time>13/11</time></div>
+  <p>Mois : volume ×1.4 la normale, pression acheteuse (+0.33). Échanges hors bourse 43% du volume (habituellement 36%). 8 jours d&#x27;accumulation contre 1 de distribution sur 5 semaines (hausses ou baisses sur fort volume). Force relative : +41.4% sur 3 mois face à son secteur, avec un volume en hausse (soutien probable des institutions). Bourses privées (semaine du 19/10, chiffres FINRA) : 26% du volume (habituellement 26%), plateformes de blocs ×2.9 leur volume habituel ; banques les plus actives : Morgan Stanley, UBS, Goldman Sachs ; semaine dominée par les hausses. Gros blocs : 3 transactions d&#x27;au moins 1 M$ sur 5 séances (13.0 M$, 1.7% des capitaux échangés), 100% à l&#x27;achat, dont 1 hors bourse.</p></li><li class="alert">
+  <div class="alert-head"><span class="chip sell">distribution</span><span class="ticker">MCHP</span>
+  <span class="score">score -3.0</span><time>13/11</time></div>
+  <p>Mois : volume ×1.6 la normale, pression vendeuse (-0.17). Force relative : -16.7% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions). Positions vendeuses déclarées : +17% depuis le rapport précédent (arrêté au 30/10) — les paris à la baisse augmentent.</p></li><li class="alert">
+  <div class="alert-head"><span class="chip sell">distribution</span><span class="ticker">CTVA</span>
+  <span class="score">score -3.0</span><time>13/11</time></div>
+  <p>Semaine : volume ×2.7 la normale, pression vendeuse (-0.23). Force relative : -24.7% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions). Bourses privées (semaine du 19/10, chiffres FINRA) : 23% du volume (habituellement 26%), plateformes de blocs ×4.7 leur volume habituel, plateformes des banques ×4.1 leur volume habituel ; banques les plus actives : Morgan Stanley, UBS, Goldman Sachs ; semaine dominée par les baisses. Positions vendeuses déclarées : +32% depuis le rapport précédent (arrêté au 30/10) — les paris à la baisse augmentent.</p></li><li class="alert">
+  <div class="alert-head"><span class="chip buy">accumulation</span><span class="ticker">CVS</span>
+  <span class="score">score +3.0</span><time>13/11</time></div>
+  <p>Mois : volume ×1.3 la normale sans mouvement de prix — quelqu&#x27;un absorbe les ventes (accumulation discrète). Divergence : sur un mois, le volume des hausses domine (+0.18) alors que le prix recule ou stagne (-2.8%) — achats cachés. 7 jours d&#x27;accumulation contre 2 de distribution sur 5 semaines (hausses ou baisses sur fort volume). Achats des dirigeants : 1 dirigeant(s) ou gros actionnaire(s) ont acheté sur le marché pour 2.0 M$ sur 3 mois (Form 4) — Shah Prem S (dirigeant — EVP and Group President).</p></li><li class="alert">
+  <div class="alert-head"><span class="chip buy">accumulation</span><span class="ticker">LBTYA</span>
+  <span class="score">score +3.0</span><time>13/11</time></div>
+  <p>Mois : volume ×2.3 la normale, pression acheteuse (+0.28). Bourses privées (semaine du 19/10, chiffres FINRA) : 27% du volume (habituellement 23%), plateformes de blocs ×6.8 leur volume habituel, plateformes des banques ×2.4 leur volume habituel ; banques les plus actives : Morgan Stanley, UBS, Goldman Sachs ; semaine dominée par les baisses. Achats des dirigeants : 3 dirigeant(s) ou gros actionnaire(s) ont acheté sur le marché pour 4.5 M$ sur 3 mois (Form 4) — Rodriguez Enrique (dirigeant — EVP, Chief Technology Officer), Malone John C (actionnaire de plus de 10 %), Fries Michael T (administrateur, dirigeant — President &amp; CEO). Franchissement de seuil : BlackRock a déclaré plus de 5 % du capital le 27/10/2026 (13G, investisseur passif) ; Goldman Sachs Group a déclaré plus de 5 % du capital le 10/11/2026 (13G, investisseur passif).</p></li><li class="alert">
+  <div class="alert-head"><span class="chip sell">distribution</span><span class="ticker">KLAC</span>
+  <span class="score">score -2.8</span><time>13/11</time></div>
+  <p>Semaine : volume ×1.4 la normale sans mouvement de prix — quelqu&#x27;un absorbe les ventes (accumulation discrète). Mois : volume ×3.2 la normale, pression vendeuse (-0.25). 3 jours d&#x27;accumulation contre 8 de distribution sur 5 semaines (hausses ou baisses sur fort volume). Force relative : -22.3% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions). Bourses privées (semaine du 19/10, chiffres FINRA) : 21% du volume (habituellement 21%), plateformes de blocs ×2.5 leur volume habituel ; banques les plus actives : UBS, Morgan Stanley, Goldman Sachs ; semaine dominée par les baisses.</p></li><li class="alert">
+  <div class="alert-head"><span class="chip sell">distribution</span><span class="ticker">CMI</span>
+  <span class="score">score -2.5</span><time>13/11</time></div>
+  <p>Mois : volume ×1.6 la normale, pression vendeuse (-0.39). Force relative : -25.5% sur 3 mois face à son secteur, avec un volume en hausse (désengagement probable des institutions).</p></li></ul>
+      </section>
+      <section class="panel" aria-label="Banques">
+        <h2>Banques · contrats à terme</h2>
+        <p class="note">Données réelles de la CFTC, publiées chaque vendredi.</p>
+        <div class="bank">
+  <div class="bank-name">E-mini Nasdaq-100<span class="chip warn">plus vendeuses que d'habitude</span></div>
+  <div class="bank-figures"><span class="big">-38%</span>
+  <span class="muted">des positions ouvertes, habituellement -11% · rang historique 21%</span></div>
+  <div class="muted small">Rapport du 03/11/2026</div></div><div class="bank">
+  <div class="bank-name">E-mini S&amp;P 500<span class="chip warn">plus vendeuses que d'habitude</span></div>
+  <div class="bank-figures"><span class="big">-35%</span>
+  <span class="muted">des positions ouvertes, habituellement -17% · rang historique 8%</span></div>
+  <div class="muted small">Rapport du 03/11/2026</div></div><p class="note">Les banques couvrent les achats de leurs clients : elles sont presque toujours vendeuses nettes. Seul l'écart à leur habitude compte.</p>
+      </section>
+      <section class="panel" aria-label="Portefeuille">
+        <h2>Portefeuille · backtest</h2>
+        <div class="table-wrap"><table>
+<thead><tr><th>Ligne</th><th class="num">Poids</th><th class="num">Depuis l'achat</th><th class="num">Hausse à 3 mois</th><th>Signal</th></tr></thead>
+<tbody><tr><td class='ticker'>BDX</td><td class='num'>10,3%</td><td class='num'>+9,5%</td><td class='num'>62%</td><td><span class='chip buy'>conserver</span></td></tr><tr><td class='ticker'>MET</td><td class='num'>9,0%</td><td class='num'>+2,7%</td><td class='num'>59%</td><td><span class='chip buy'>conserver</span></td></tr><tr><td class='ticker'>NKE</td><td class='num'>8,9%</td><td class='num'>-0,6%</td><td class='num'>58%</td><td><span class='chip buy'>conserver</span></td></tr><tr><td class='ticker'>AEP</td><td class='num'>8,2%</td><td class='num'>+1,6%</td><td class='num'>62%</td><td><span class='chip buy'>conserver</span></td></tr><tr><td class='ticker'>CI</td><td class='num'>8,1%</td><td class='num'>-0,5%</td><td class='num'>59%</td><td><span class='chip buy'>conserver</span></td></tr><tr><td class='ticker'>WAT</td><td class='num'>5,7%</td><td class='num'>+10,4%</td><td class='num'>62%</td><td><span class='chip warn'>allègement progressif</span></td></tr><tr><td class='ticker'>VEEV</td><td class='num'>4,9%</td><td class='num'>+13,6%</td><td class='num'>64%</td><td><span class='chip warn'>allègement progressif</span></td></tr><tr><td class='ticker'>WDAY</td><td class='num'>4,4%</td><td class='num'>+4,2%</td><td class='num'>64%</td><td><span class='chip warn'>allègement progressif</span></td></tr><tr><td class='ticker'>VRTX</td><td class='num'>4,3%</td><td class='num'>+5,0%</td><td class='num'>62%</td><td><span class='chip buy'>renforcer</span></td></tr><tr><td class='ticker'>HPQ</td><td class='num'>3,7%</td><td class='num'>+8,1%</td><td class='num'>64%</td><td><span class='chip warn'>allègement progressif</span></td></tr><tr><td class='ticker'>ALNY</td><td class='num'>3,1%</td><td class='num'>-18,7%</td><td class='num'>62%</td><td><span class='chip warn'>allègement progressif</span></td></tr><tr><td class='ticker'>VRSK</td><td class='num'>0,4%</td><td class='num'>+3,7%</td><td class='num'>64%</td><td><span class='chip warn'>allègement progressif</span></td></tr></tbody></table></div>
+      </section>
+    </div>
+  </div>
+  <footer>Aucun ordre réel n'est passé : le fonds montre ce qu'il ferait et pourquoi. Les résultats passés,
+  simulés ou réels, ne garantissent pas les résultats futurs.</footer>
+</div>
+
+<script>
+(function () {
+  // Calculateur : montants en euros à acheter ou vendre, selon le portefeuille saisi par le lecteur.
+  var root = document.getElementById('mon-portefeuille');
+  if (root) {
+    var weight = parseFloat(root.getAttribute('data-weight')) || 0;
+    var part = parseFloat(root.getAttribute('data-partial')) || 0.5;
+    var total = document.getElementById('pf-total'), invested = document.getElementById('pf-invested');
+    var fmt = new Intl.NumberFormat('fr-FR', {style: 'currency', currency: 'EUR', maximumFractionDigits: 0});
+    function load(k) { try { return localStorage.getItem('desk.' + k); } catch (e) { return null; } }
+    function save(k, v) { try { localStorage.setItem('desk.' + k, v); } catch (e) {} }
+    function num(el) { var v = parseFloat(String(el.value).replace(',', '.')); return isFinite(v) && v > 0 ? v : 0; }
+    total.value = load('total') || '';
+    invested.value = load('invested') || '';
+    var boxes = document.querySelectorAll('.sizing');
+    boxes.forEach(function (box) {
+      var held = box.querySelector('.held'), stored = load('held.' + box.getAttribute('data-key'));
+      if (stored !== null) held.value = stored;
+      held.addEventListener('input', function () { save('held.' + box.getAttribute('data-key'), held.value); update(); });
+    });
+    function update() {
+      var V = num(total), I = Math.min(num(invested), V), free = V - I, target = weight * V;
+      document.getElementById('pf-summary').textContent = V > 0
+        ? 'Une ligne pleine = ' + fmt.format(target) + ' (' + (weight * 100).toFixed(1).replace('.', ',') +
+          ' % du portefeuille). Espèces disponibles : ' + fmt.format(free) + '.'
+        : 'Indiquez la valeur de votre portefeuille pour voir les montants.';
+      boxes.forEach(function (box) {
+        var mode = box.getAttribute('data-mode'), out = box.querySelector('.advice'), heldEl = box.querySelector('.held');
+        if (V <= 0) { out.textContent = ''; return; }
+        var defaultHeld = mode === 'sell' ? target : 0;
+        heldEl.placeholder = Math.round(defaultHeld);
+        var held = heldEl.value === '' ? defaultHeld : num(heldEl), text;
+        if (mode === 'buy' || mode === 'add') {
+          var need = Math.max(0, target - held);
+          text = need <= 0 ? 'Ligne déjà pleine (' + fmt.format(held) + ') : rien à acheter.'
+            : (held > 0 ? 'Renforcez de ' : 'Achetez ') + fmt.format(need) +
+              ' pour arriver à ' + fmt.format(target) + '.';
+          if (need > free + 0.5) {
+            text += free > 0 ? ' Vous n’avez que ' + fmt.format(free) + ' en espèces : limitez-vous à ' + fmt.format(free) + '.'
+              : ' Plus d’espèces disponibles : pas d’achat (règle du portefeuille).';
+          }
+        } else if (mode === 'half' || mode === 'trim') {
+          text = 'Allègement : on ne fait rien (règle du portefeuille réel), la ligne est gardée.';
+        } else {
+          text = 'Vendez toute la ligne : ' + fmt.format(held) + '.';
+        }
+        out.textContent = text;
+      });
+    }
+    [total, invested].forEach(function (el) {
+      el.addEventListener('input', function () { save(el.id === 'pf-total' ? 'total' : 'invested', el.value); update(); });
+    });
+    update();
+  }
+  // Cours en direct : seulement quand la page est ouverte par le logiciel local (temps_reel.py), qui
+  // fournit /api/cours. Ailleurs (page Desk en ligne), la requête échoue et les valeurs du matin restent.
+  var lines = document.querySelectorAll('tr.live-line');
+  if (lines.length && /^https?:$/.test(location.protocol)) {
+    var status = document.getElementById('lv-status'), summary = document.getElementById('lv-summary');
+    var symbols = Array.prototype.map.call(lines, function (tr) { return tr.getAttribute('data-asset'); });
+    function pct(x) { return (x > 0 ? '+' : '') + (x * 100).toFixed(1).replace('.', ',') + '%'; }
+    function usd(x) { return x.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' $'; }
+    var live = false, timer = null;
+    function refresh() {
+      fetch('/api/cours?symbols=' + encodeURIComponent(symbols.join(',')), {cache: 'no-store'})
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (data) {
+          var rets = [];
+          lines.forEach(function (tr) {
+            var q = (data.cours || {})[tr.getAttribute('data-asset')], entry = parseFloat(tr.getAttribute('data-entry'));
+            if (!q || !(q.prix > 0) || !(entry > 0)) return;
+            var ret = q.prix / entry - 1, cell = tr.querySelector('.lv-ret');
+            rets.push(ret);
+            cell.textContent = pct(ret);
+            cell.className = 'lv-ret num ' + (ret > 0 ? 'pos' : (ret < 0 ? 'neg' : ''));
+            tr.querySelector('.lv-px').textContent = usd(q.prix);
+          });
+          if (!rets.length) return;
+          live = true;
+          var avg = rets.reduce(function (a, b) { return a + b; }, 0) / rets.length;
+          summary.textContent = 'Rendement moyen des lignes détenues : ' + pct(avg) + ' ; ' +
+            rets.filter(function (r) { return r > 0; }).length + ' en gain, ' +
+            rets.filter(function (r) { return r < 0; }).length + ' en perte.';
+          status.textContent = 'En direct · cours mis à jour à ' + new Date().toLocaleTimeString('fr-FR') +
+            ' (' + (data.source || 'Alpaca') + ', actualisation chaque minute ; hors séance : dernier cours échangé).';
+        })
+        .catch(function () { if (!live && timer) clearInterval(timer); });  // pas de logiciel local : on s’arrête
+    }
+    refresh();
+    timer = setInterval(refresh, 60000);
+  }
+  var buttons = document.querySelectorAll('.filters button');
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      buttons.forEach(function (b) { b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+      var kind = btn.getAttribute('data-filter');
+      document.querySelectorAll('.ticket').forEach(function (t) {
+        t.hidden = !(kind === 'all' || t.getAttribute('data-kind') === kind);
+      });
+    });
+  });
+})();
+</script>
+
+<script type="application/json" id="etat-desk">{"derniere_seance": "2026-11-13", "pelosi_docs": ["20001991", "20002236", "20002351", "20003320", "20003475", "20004503", "20004596", "20005096", "20005689", "20006683", "20006735", "20007655", "20008699", "20009030", "20009293", "20009481", "20010452", "20010631", "20011279", "20011965", "20012127", "20012288", "20012343", "20015042", "20016155", "20016340", "20016726", "20016961", "20017123", "20017460", "20017834", "20018011", "20018355", "20018539", "20019004", "20019331", "20020106", "20020208", "20020515", "20020561", "20020662", "20020916", "20021142", "20021374", "20021438", "20021675", "20021837", "20022063", "20022260", "20022320", "20022664", "20023080", "20023192", "20024186", "20024542", "20024625", "20025368", "20025535", "20025819", "20026590", "20030630", "20033337", "20033725", "20034836", "20035143", "20035553", "20035780"], "genere_le": "2026-11-14T07:43:51.088577+00:00", "depart": "2026-10-15"}</script>
